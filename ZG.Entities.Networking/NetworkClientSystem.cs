@@ -332,7 +332,7 @@ namespace ZG
                                 //* disconnectReason = (DisconnectReason)stream.ReadByte();
 
                                 connections[0] = default;
-                                break;
+                                return;
                         }
                     }
                 }

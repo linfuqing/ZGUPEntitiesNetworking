@@ -72,6 +72,20 @@ namespace ZG
 
             public NativeParallelMultiHashMap<T, uint>.Enumerator GetNodeIDs(uint id) => _nodeIDs.GetValuesForKey(_identities[id].node);
 
+            public bool TryGetNode(uint id, out T node)
+            {
+                if (_identities.TryGetValue(id, out var identity))
+                {
+                    node = identity.node;
+
+                    return true;
+                }
+
+                node = default;
+
+                return false;
+            }
+
             public NetworkPipeline GetPipeline(uint id)
             {
                 if (_identities.TryGetValue(id, out var identity))
