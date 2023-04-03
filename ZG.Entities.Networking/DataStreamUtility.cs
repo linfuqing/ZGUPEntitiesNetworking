@@ -68,6 +68,8 @@ namespace ZG
             return Read<sbyte>(ref reader);
         }
 
+        public static double ReadPackedDouble(this ref DataStreamReader reader) => reader.ReadPackedDouble(StreamCompressionModel.Default);
+
         public static ulong ReadPackedULong(this ref DataStreamReader reader) => reader.ReadPackedULong(StreamCompressionModel.Default);
 
         public static uint ReadPackedUInt(this ref DataStreamReader reader) => reader.ReadPackedUInt(StreamCompressionModel.Default);
@@ -75,6 +77,8 @@ namespace ZG
         public static void WritePackedUInt(this ref DataStreamWriter writer, uint value) => writer.WritePackedUInt(value, StreamCompressionModel.Default);
 
         public static void WritePackedULong(this ref DataStreamWriter writer, ulong value) => writer.WritePackedULong(value, StreamCompressionModel.Default);
+
+        public static void WritePackedDouble(this ref DataStreamWriter writer, double value) => writer.WritePackedDouble(value, StreamCompressionModel.Default);
 
         public static unsafe bool Write<T>(ref DataStreamWriter writer, T value) where T : unmanaged
         {
