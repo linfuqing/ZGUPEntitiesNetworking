@@ -13,11 +13,109 @@ using static Unity.Networking.Transport.NetworkParameterConstants;
 
 namespace ZG
 {
-    public class NetworkServerComponent : MonoBehaviour, INetworkHost
+    public interface INetworkServerWrapper
     {
-        public delegate void Handler(NetworkConnection connection, NetworkReader reader);
+        int GetLayer(int type);
 
-        public int maxPlayerCount = 64;
+        bool Register(
+            NetworkReader reader,
+            in NetworkConnection connection,
+            ref NetworkIdentityComponent identity,
+            ref uint id,
+            out int type,
+            out int node,
+            out int layerMask,
+            out float visibilityDistance);
+
+        bool Unregister(uint id, in NetworkConnection connection, NetworkReader reader);
+
+        NetworkIdentityComponent Create(uint id, int type);
+
+        void Destroy(NetworkIdentityComponent identity);
+
+        bool Init(bool isNew, uint sourceID, uint destinationID, ref NetworkWriter writer);
+
+        void SendRegisterMessage(ref NetworkWriter writer, uint id);
+
+        void SendUnregisterMessage(ref NetworkWriter writer, uint id);
+    }
+
+    public delegate void NetworkServerHandler(NetworkConnection connection, NetworkReader reader);
+
+    public interface INetworkServer
+    {
+        public event Action<NetworkConnection> onConnect;
+        public event Action<NetworkConnection, DisconnectReason> onDisconnect;
+
+        public event Action<uint, bool> onActive;
+
+        bool isExclusivingTransaction { get; }
+
+        int maxConnectionCount { get; set; }
+
+        int connectionCount { get; }
+
+        bool IsConnected(in NetworkConnection connection);
+
+        void Disconnect(in NetworkConnection connection);
+
+        uint GetID(in NetworkConnection connection);
+
+        NetworkConnection GetConnection(uint id);
+
+        NetworkIdentityComponent GetIdentity(uint id);
+
+        bool Register(NetworkIdentityComponent identity, NetworkReader reader);
+
+        bool Unregister(uint id, NetworkReader reader);
+
+        bool Move(uint id, int node, int layerMask, float visibilityDistance);
+
+        bool Send<T>(int channel, uint messageType, uint id, T message) where T : INetworkMessage;
+
+        bool Send<T>(int channel, uint messageType, in NetworkConnection connection, T message) where T : INetworkMessage;
+
+        bool Send(int channel, uint messageType, in NetworkConnection connection);
+
+        bool BeginSend(int channel, uint messageType, in NetworkConnection connection, out NetworkWriter writer);
+
+        int EndSend(NetworkWriter writer);
+
+        void Configure(NativeArray<NetworkPipelineType> pipelineTypes);
+
+        void Listen(ushort port, NetworkFamily family = NetworkFamily.Ipv4);
+
+        void Shutdown();
+
+        bool IsExclusiveTransaction(uint id);
+
+        void ExclusiveTransactionStart();
+
+        void ExclusiveTransactionEnd();
+
+        void UnregisterHandler(uint messageType);
+
+        void RegisterHandler(uint messageType, NetworkServerHandler handler);
+
+        uint CreateNewID();
+
+        bool TryGetNode(uint id, out int node);
+
+        bool NodeContains(int node, uint id);
+    }
+
+    public interface INetworkHostServer
+    {
+        int EndRPC(NetworkRPCType type, NetworkWriter writer, in NativeArray<uint> additionalIDs = default, in NativeArray<uint> maskIDs = default);
+
+        int EndRPC(NetworkWriter writer, in NativeArray<uint> specifiedIDs);
+
+        int EndRPCWithout(NetworkWriter writer, in NativeArray<uint> ids);
+    }
+
+    public sealed class NetworkServerComponent : MonoBehaviour, INetworkHost, INetworkServer, INetworkHostServer
+    {
+        //public int maxConnectionCount = 64;
 
         [SerializeField]
         internal int _connectTimeoutMS = ConnectTimeoutMS;
@@ -34,24 +132,26 @@ namespace ZG
         [SerializeField]
         internal int _fixedFrameTimeMS = 0;
         [SerializeField]
-        internal int _receiveQueueCapacity = ReceiveQueueCapacity;
+        internal int _receiveQueueCapacity = 4096;//ReceiveQueueCapacity;
         [SerializeField]
-        internal int _sendQueueCapacity = SendQueueCapacity;
+        internal int _sendQueueCapacity = 4096;// SendQueueCapacity;
+
+        [SerializeField]
+        internal int _defaultChannel;
 
         [SerializeField]
         internal string _worldName = "Server";
 
-        public NetworkIdentityComponent[] prefabs;
-
         private World __world;
         private NetworkServerManager __manager;
         private NetworkRPCController __controller;
+        private INetworkServerWrapper __wrapper;
 
         private NativeArray<NetworkPipeline> __pipelines;
         private NativeList<uint> __ids;
         private NativeList<NetworkServer.Message> __messages;
 
-        private Dictionary<uint, Handler> __handlers;
+        private Dictionary<uint, NetworkServerHandler> __handlers;
         private Dictionary<uint, NetworkIdentityComponent> __identities;
 
         private HashSet<uint> __exclusiveTransactionIdentityIDs;
@@ -68,6 +168,19 @@ namespace ZG
             get;
 
             private set;
+        }
+
+        public int maxConnectionCount
+        {
+            get => _maxConnectAttempts;
+
+            set
+            {
+                if (isConfigured)
+                    throw new InvalidOperationException();
+
+                _maxConnectAttempts = value;
+            }
         }
 
         public int connectionCount => server.connectionCount;
@@ -180,16 +293,33 @@ namespace ZG
             return server.CreateNewID();
         }
 
+        public bool TryGetNode(uint id, out int node)
+        {
+            return manager.TryGetNode(id, out node);
+        }
+
+        public bool NodeContains(int node, uint id)
+        {
+            var enumerator = manager.GetNodeIDs(node);
+            while (enumerator.MoveNext())
+            {
+                if (enumerator.Current == id)
+                    return true;
+            }
+
+            return false;
+        }
+
         public void UnregisterHandler(uint messageType)
         {
             if (__handlers != null)
                 __handlers.Remove(messageType);// MsgType.Disconnect);
         }
 
-        public void RegisterHandler(uint messageType, Handler handler)
+        public void RegisterHandler(uint messageType, NetworkServerHandler handler)
         {
             if (__handlers == null)
-                __handlers = new Dictionary<uint, Handler>();
+                __handlers = new Dictionary<uint, NetworkServerHandler>();
 
             __handlers[messageType] = handler;
         }
@@ -247,7 +377,7 @@ namespace ZG
             if (__identities != null)
             {
                 foreach(var identity in __identities.Values)
-                    _Destroy(identity);
+                    __Destroy(identity);
 
                 __identities.Clear();
             }
@@ -263,13 +393,13 @@ namespace ZG
         //注意：这些链接没有断开
         public bool Unregister(uint id, NetworkReader reader)
         {
-            return __Unregister(id, manager.GetConnection(id), reader);
+            return __Unregister(_defaultChannel, id, manager.GetConnection(id), reader);
         }
 
         public bool Register(NetworkIdentityComponent identity, NetworkReader reader)
         {
             uint id = 0;
-            if (!_Register(
+            if (!__Register(
                 reader, 
                 default, 
                 ref identity, 
@@ -281,6 +411,7 @@ namespace ZG
                 return false;
 
             return __Register(
+                _defaultChannel, 
                 id, 
                 type, 
                 node, 
@@ -295,11 +426,11 @@ namespace ZG
             var commander = this.commander;
             if(commander.BeginCommand(id, NetworkPipeline.Null, server.driver, out var writer))
             {
-                _SendRegisterMessage(ref writer, id);
+                __SendRegisterMessage(ref writer, id);
 
                 int length = writer.Length;
 
-                _SendUnregisterMessage(ref writer, id);
+                __SendUnregisterMessage(ref writer, id);
 
                 int value = commander.EndCommandMove(length, node, layerMask, visibilityDistance, writer);
                 if (value < 0)
@@ -424,136 +555,12 @@ namespace ZG
             return false;
         }
 
-        protected void LateUpdate()
+        private int __GetLayer(int type)
         {
-            var server = this.server;
-
-            Handler handler;
-            var messages = server.messagesReadOnly;
-            NetworkServer.Message message;
-            int numMessages = messages.Length;
-            for (int i = 0; i < numMessages; ++i)
-            {
-                message = messages[i];
-
-                try
-                {
-                    switch (message.type)
-                    {
-                        case (uint)NetworkMessageType.Connect:
-                            if (onConnect != null)
-                                onConnect(message.connection);
-                            break;
-                        case (uint)NetworkMessageType.Disconnect:
-                            if (onDisconnect != null)
-                                onDisconnect(message.connection, (DisconnectReason)message.stream.ReadByte());
-                            break;
-                        default:
-                            if (__handlers != null && __handlers.TryGetValue(message.type, out handler) && handler != null)
-                                handler(message.connection, message.stream);
-                            else
-                                Debug.LogError($"The handler of message {message.type} is missing!");
-                            break;
-                    }
-                }
-                catch (Exception e)
-                {
-                    Debug.LogException(e.InnerException ?? e);
-                }
-            }
-
-            if (__ids.IsCreated)
-                __ids.Clear();
-            else
-                __ids = new NativeList<uint>(Allocator.Persistent);
-
-            server.GetIDs(ref __ids);
-            foreach (var id in __ids)
-            {
-                if (__messages.IsCreated)
-                    __messages.Clear();
-                else
-                    __messages = new NativeList<NetworkServer.Message>(Allocator.Persistent);
-
-                server.Receive(id, ref __messages);
-
-                numMessages = __messages.Length;
-                for (int i = 0; i < numMessages; ++i)
-                {
-                    message = __messages[i];
-
-                    switch (message.type)
-                    {
-                        case (uint)NetworkMessageType.RPC:
-                            __RPC(id, message.connection, message.stream);
-                            break;
-                        case (uint)NetworkMessageType.Register:
-                            __Register(id, message.connection, message.stream);
-                            break;
-                        case (uint)NetworkMessageType.Unregister:
-                            __Unregister(id, message.connection, message.stream);
-                            break;
-                    }
-                }
-            }
-
-            if (onActive != null)
-            {
-                var activeEvents = commander.activeEventsReadOnly;
-                NetworkRPCCommander.ActiveEvent activeEvent;
-                int numActiveEvents = activeEvents.Length;
-                for (int i = 0; i < numActiveEvents; ++i)
-                {
-                    activeEvent = activeEvents[i];
-
-                    onActive(activeEvent.id, activeEvent.type == NetworkRPCCommander.ActiveEventType.Enable);
-                }
-            }
-
-            var driver = server.driver;
-            NetworkWriter writer;
-
-            __ids.Clear();
-            commander.GetInitIDs(ref __ids);
-
-            int result;
-            foreach (var id in __ids)
-            {
-                foreach (var initEvent in commander.GetInitEvents(id))
-                {
-                    if (commander.BeginCommand(id, NetworkPipeline.Null, driver, out writer))
-                    {
-                        if (_Init(initEvent.type == NetworkRPCCommander.InitType.New, id, initEvent.id, ref writer))
-                        {
-                            result = commander.EndCommandInit(initEvent.type, initEvent.id, writer);
-                            if (result < 0)
-                                Debug.LogError($"[EndCommandInit]{(StatusCode)result}");
-                        }
-                        else
-                            commander.AbortCommand(writer);
-                    }
-                }
-            }
+            return __wrapper == null ? 0 : __wrapper.GetLayer(type);
         }
 
-        protected void OnDestroy()
-        {
-            if (__pipelines.IsCreated)
-                __pipelines.Dispose();
-
-            if (__ids.IsCreated)
-                __ids.Dispose();
-
-            if (__messages.IsCreated)
-                __messages.Dispose();
-        }
-
-        protected virtual int _GetLayer(int type)
-        {
-            return 0;
-        }
-
-        protected virtual bool _Register(
+        private bool __Register(
             NetworkReader reader,
             in NetworkConnection connection,
             ref NetworkIdentityComponent identity,
@@ -563,47 +570,60 @@ namespace ZG
             out int layerMask,
             out float visibilityDistance)
         {
-            type = 0;
-            node = 0;
-            layerMask = ~0;
-            visibilityDistance = 0.0f;
+            if (__wrapper == null)
+            {
+                type = 0;
+                node = 0;
+                layerMask = ~0;
+                visibilityDistance = 0.0f;
 
-            return true;
+                return true;
+            }
+
+            return __wrapper.Register(reader, connection, ref identity, ref id, out type, out node, out layerMask, out visibilityDistance);
         }
 
-        protected virtual NetworkIdentityComponent _Instantiate(uint id, int type)
+        private NetworkIdentityComponent __Create(uint id, int type)
         {
-            int numPrefabs = prefabs == null ? 0 : prefabs.Length;
-            return numPrefabs > type ? Instantiate(prefabs[type]) : (numPrefabs == 1 ? Instantiate(prefabs[0]) : null);
+            return __wrapper == null ? null : __wrapper.Create(id, type);
+            /*int numPrefabs = prefabs == null ? 0 : prefabs.Length;
+            return numPrefabs > type ? Instantiate(prefabs[type]) : (numPrefabs == 1 ? Instantiate(prefabs[0]) : null);*/
         }
 
-        protected virtual void _Destroy(NetworkIdentityComponent identity)
+        private void __Destroy(NetworkIdentityComponent identity)
         {
-            if (identity != null)
-                Destroy(identity.gameObject);
+            if (__wrapper == null)
+            {
+                if (identity != null)
+                    Destroy(identity.gameObject);
+            }
+            else
+                __wrapper.Destroy(identity);
         }
 
-        protected virtual bool _Init(bool isNew, uint sourceID, uint destinationID, ref NetworkWriter writer)
+        private bool __Init(bool isNew, uint sourceID, uint destinationID, ref NetworkWriter writer)
         {
-            return false;
+            return __wrapper != null && __wrapper.Init(isNew, sourceID, destinationID, ref writer);
         }
 
-        protected virtual void _SendRegisterMessage(ref NetworkWriter writer, uint id)
+        private void __SendRegisterMessage(ref NetworkWriter writer, uint id)
         {
-
+            if (__wrapper != null)
+                __wrapper.SendRegisterMessage(ref writer, id);
         }
 
-        protected virtual void _SendUnregisterMessage(ref NetworkWriter writer, uint id)
+        private void __SendUnregisterMessage(ref NetworkWriter writer, uint id)
         {
-
+            if (__wrapper != null)
+                __wrapper.SendUnregisterMessage(ref writer, id);
         }
 
-        protected virtual bool _Unregister(uint id, in NetworkConnection connection, NetworkReader reader)
+        private bool __Unregister(uint id, in NetworkConnection connection, NetworkReader reader)
         {
-            return true;
+            return __wrapper != null && __wrapper.Unregister(id, connection, reader);
         }
 
-        private bool __Unregister(uint id, in NetworkConnection connection, NetworkReader reader, int channel = 0)
+        private bool __Unregister(int channel, uint id, in NetworkConnection connection, NetworkReader reader)
         {
             if (__identities != null && __identities.TryGetValue(id, out var identity))
             {
@@ -623,15 +643,15 @@ namespace ZG
                 }
 
                 var commander = this.commander;
-                if (_Unregister(id, connection, reader))
+                if (__Unregister(id, connection, reader))
                 {
                     __identities.Remove(id);
 
-                    _Destroy(identity);
+                    __Destroy(identity);
 
                     if (commander.BeginCommand(id, __pipelines[channel], server.driver, out var writer))
                     {
-                        _SendUnregisterMessage(ref writer, id);
+                        __SendUnregisterMessage(ref writer, id);
 
                         int result = commander.EndCommandUnregister(writer);
                         if (result < 0)
@@ -652,7 +672,7 @@ namespace ZG
                 {
                     if (commander.BeginCommand(id, __pipelines[channel], server.driver, out var writer))
                     {
-                        _SendUnregisterMessage(ref writer, id);
+                        __SendUnregisterMessage(ref writer, id);
                         int result = commander.EndCommandDisconnect(type, writer);
                         if (result < 0)
                         {
@@ -675,13 +695,13 @@ namespace ZG
             return false;
         }
 
-        private bool __Register(uint id, in NetworkConnection connection, NetworkReader reader)
+        private bool __Register(int channel, uint id, in NetworkConnection connection, NetworkReader reader)
         {
-            if (server.connectionCount < maxPlayerCount)
+            //if (server.connectionCount < maxPlayerCount)
             {
                 uint originID = id;
                 NetworkIdentityComponent identity = null;
-                if (!_Register(
+                if (!__Register(
                     reader, 
                     connection, 
                     ref identity,
@@ -698,27 +718,27 @@ namespace ZG
                     ids[connection] = id;
                 }
 
-                __Register(id, type, node, layerMask, visibilityDistance, connection, identity);
+                __Register(channel, id, type, node, layerMask, visibilityDistance, connection, identity);
 
                 return true;
             }
 
-            server.driver.Disconnect(connection);
+            /*server.driver.Disconnect(connection);
 
             Debug.LogError("[Register Fail]Player count is out of range.");
 
-            return false;
+            return false;*/
         }
 
-        public bool __Register(
+        private bool __Register(
+            int channel, 
             uint id, 
             int type,
             int node,
             int layerMask, 
             float visibilityDistance, 
             in NetworkConnection connection,
-            NetworkIdentityComponent instance, 
-            int channel = 0)
+            NetworkIdentityComponent instance)
         {
             bool isReconnect;
             var target = GetIdentity(id);
@@ -726,7 +746,7 @@ namespace ZG
             {
                 if (target == null)
                 {
-                    target = _Instantiate(id, type);
+                    target = __Create(id, type);
                     if (target == null)
                     {
                         Debug.LogError("Register Fail: Instantiate Error.");
@@ -764,7 +784,7 @@ namespace ZG
                         if (target._onDestroy != null)
                             target._onDestroy();
 
-                        _Destroy(target);
+                        __Destroy(target);
                     }
 
                     isReconnect = true;
@@ -777,7 +797,7 @@ namespace ZG
             var driver = server.driver;
             if (commander.BeginCommand(id, pipeline, driver, out var writer))
             {
-                _SendRegisterMessage(ref writer, id);
+                __SendRegisterMessage(ref writer, id);
 
                 int result;
                 if (isReconnect)
@@ -794,7 +814,7 @@ namespace ZG
                 }
                 else
                 {
-                    result = commander.EndCommandRegister(type, node, _GetLayer(type), layerMask, visibilityDistance, connection, writer);
+                    result = commander.EndCommandRegister(type, node, __GetLayer(type), layerMask, visibilityDistance, connection, writer);
                     if (result < 0)
                     {
                         Debug.LogError($"[EndCommandRegister]{(StatusCode)result}");
@@ -858,13 +878,141 @@ namespace ZG
             return true;
         }
 
-
-        public NetworkRPCController __GetController()
+        private NetworkRPCController __GetController()
         {
             if (!__controller.isCreated)
                 __controller = world.GetOrCreateSystemUnmanaged<NetworkRPCFactorySystem>().controller;
 
             return __controller;
+        }
+
+        void Awake()
+        {
+            __wrapper = GetComponent<INetworkServerWrapper>();
+        }
+
+        void OnDestroy()
+        {
+            if (__pipelines.IsCreated)
+                __pipelines.Dispose();
+
+            if (__ids.IsCreated)
+                __ids.Dispose();
+
+            if (__messages.IsCreated)
+                __messages.Dispose();
+        }
+
+        void LateUpdate()
+        {
+            var server = this.server;
+
+            NetworkServerHandler handler;
+            var messages = server.messagesReadOnly;
+            NetworkServer.Message message;
+            int numMessages = messages.Length;
+            for (int i = 0; i < numMessages; ++i)
+            {
+                message = messages[i];
+
+                try
+                {
+                    switch (message.type)
+                    {
+                        case (uint)NetworkMessageType.Connect:
+                            if (onConnect != null)
+                                onConnect(message.connection);
+                            break;
+                        case (uint)NetworkMessageType.Disconnect:
+                            if (onDisconnect != null)
+                                onDisconnect(message.connection, (DisconnectReason)message.stream.ReadByte());
+                            break;
+                        default:
+                            if (__handlers != null && __handlers.TryGetValue(message.type, out handler) && handler != null)
+                                handler(message.connection, message.stream);
+                            else
+                                Debug.LogError($"The handler of message {message.type} is missing!");
+                            break;
+                    }
+                }
+                catch (Exception e)
+                {
+                    Debug.LogException(e.InnerException ?? e);
+                }
+            }
+
+            if (__ids.IsCreated)
+                __ids.Clear();
+            else
+                __ids = new NativeList<uint>(Allocator.Persistent);
+
+            server.GetIDs(ref __ids);
+            foreach (var id in __ids)
+            {
+                if (__messages.IsCreated)
+                    __messages.Clear();
+                else
+                    __messages = new NativeList<NetworkServer.Message>(Allocator.Persistent);
+
+                server.Receive(id, ref __messages);
+
+                numMessages = __messages.Length;
+                for (int i = 0; i < numMessages; ++i)
+                {
+                    message = __messages[i];
+
+                    switch (message.type)
+                    {
+                        case (uint)NetworkMessageType.RPC:
+                            __RPC(id, message.connection, message.stream);
+                            break;
+                        case (uint)NetworkMessageType.Register:
+                            __Register(_defaultChannel, id, message.connection, message.stream);
+                            break;
+                        case (uint)NetworkMessageType.Unregister:
+                            __Unregister(_defaultChannel, id, message.connection, message.stream);
+                            break;
+                    }
+                }
+            }
+
+            if (onActive != null)
+            {
+                var activeEvents = commander.activeEventsReadOnly;
+                NetworkRPCCommander.ActiveEvent activeEvent;
+                int numActiveEvents = activeEvents.Length;
+                for (int i = 0; i < numActiveEvents; ++i)
+                {
+                    activeEvent = activeEvents[i];
+
+                    onActive(activeEvent.id, activeEvent.type == NetworkRPCCommander.ActiveEventType.Enable);
+                }
+            }
+
+            var driver = server.driver;
+            NetworkWriter writer;
+
+            __ids.Clear();
+            commander.GetInitIDs(ref __ids);
+
+            int result;
+            foreach (var id in __ids)
+            {
+                foreach (var initEvent in commander.GetInitEvents(id))
+                {
+                    if (commander.BeginCommand(id, NetworkPipeline.Null, driver, out writer))
+                    {
+                        if (__Init(initEvent.type == NetworkRPCCommander.InitType.New, id, initEvent.id, ref writer))
+                        {
+                            result = commander.EndCommandInit(initEvent.type, initEvent.id, writer);
+                            if (result < 0)
+                                Debug.LogError($"[EndCommandInit]{(StatusCode)result}");
+                        }
+                        else
+                            commander.AbortCommand(writer);
+                    }
+                }
+            }
         }
 
     }

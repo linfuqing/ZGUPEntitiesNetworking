@@ -1,18 +1,18 @@
 {
   "name": "cn.com.zerogame.unitypackages.entities.networking",
   "displayName": "ZGUP Entities Networking",
-  "version": "2.2.1",
+  "version": "2.2.2",
   "unity": "2022.2",
   "unityRelease": "0f1",
   "dependencies": {
-	  "com.unity.transport": "2.0.0-pre.6", 
-	  "com.unity.entities": "1.0.0-pre.15", 
-	  "cn.com.zerogame.unitypackages.entities": "2.2.1"
+    "com.unity.transport": "2.0.0-pre.6",
+    "com.unity.entities": "1.0.0-pre.15",
+    "cn.com.zerogame.unitypackages.entities": "2.2.1"
   },
   "description": "Zero Game Unity Package Entites Networking",
   "keywords": [
-    "zg", 
-	"dots", 
-	"networking"
+    "zg",
+    "dots",
+    "networking"
   ]
 }

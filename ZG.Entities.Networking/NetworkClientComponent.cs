@@ -9,27 +9,73 @@ using NetworkWriter = Unity.Collections.DataStreamWriter;
 
 namespace ZG
 {
-    public class NetworkClientComponent : MonoBehaviour, INetworkHost
+    public interface INetworkClientCreateRequest
     {
-        protected interface ICreateRequest
-        {
-            bool isDone { get; }
+        bool isDone { get; }
 
-            NetworkIdentityComponent instance { get; }
-        }
+        NetworkIdentityComponent instance { get; }
+    }
 
-        private struct CreateRequest : ICreateRequest
+    public interface INetworkClientWrapper
+    {
+        void Init(NetworkIdentityComponent identity);
+
+        NetworkIdentityComponent GetIdentity(uint id);
+
+        void Destroy(NetworkIdentityComponent identity, NetworkReader reader);
+
+        bool Create(bool isLocalPlayer, int type, uint id, NetworkReader reader, ref INetworkClientCreateRequest request);
+    }
+
+    public interface INetworkClient
+    {
+        event Action onConnect;
+        event Action<DisconnectReason> onDisconnect;
+
+        bool isBusy { get; }
+
+        bool isConfigured { get; }
+
+        bool isConnected { get; }
+
+        NetworkConnection.State connectionState { get; }
+
+        NetworkIdentityComponent GetIdentity(uint id);
+
+        void Configure(NativeArray<NetworkPipelineType> pipelineTypes);
+
+        bool Connect(in NetworkEndpoint endPoint);
+
+        void UnregisterHandler(uint messageType);
+
+        void RegisterHandler(uint messageType, Action<NetworkReader> handler);
+
+        bool Send<T>(int channel, uint messageType, in T message) where T : INetworkMessage;
+
+        bool Send(int channel, uint messageType);
+
+        bool BeginSend(int channel, uint messageType, out NetworkWriter writer);
+
+        int EndSend(NetworkWriter writer);
+
+        bool Register();
+
+        bool Register<T>(in T message) where T : INetworkMessage;
+
+        bool Unregister<T>(in T message) where T : INetworkMessage;
+
+        void Shutdown();
+
+        void InitAndCreateSync();
+    }
+
+    public sealed class NetworkClientComponent : MonoBehaviour, INetworkHost, INetworkClient
+    {
+        private struct CreateRequest : INetworkClientCreateRequest
         {
             public bool isDone => true;
 
             public NetworkIdentityComponent instance { get; set; }
-        }
-
-        protected enum MissingRpcType
-        {
-            Used,
-            Keep,
-            Drop
         }
 
         private struct BufferToKeep
@@ -48,7 +94,7 @@ namespace ZG
         {
             //public uint order;
             public uint identity;
-            public ICreateRequest request;
+            public INetworkClientCreateRequest request;
         }
 
         private struct BufferToInit
@@ -63,12 +109,10 @@ namespace ZG
         [SerializeField]
         internal string _worldName = "Client";
 
-        public NetworkIdentityComponent[] prefabs;
-
         public long maxUpdateTicksPerFrame = TimeSpan.TicksPerMillisecond << 6;
 
         private bool __isBusy;
-        //private uint __createOrder;
+        private INetworkClientWrapper __wrapper;
         private NetworkClientSystem __system;
         private NativeArray<NetworkPipeline> __pipelines;
         private NativeList<uint> __ids;
@@ -77,12 +121,6 @@ namespace ZG
         private Dictionary<uint, BufferToInit> __buffersToInit;
         private Dictionary<uint, BufferToCreate> __buffersToCreate;
         private Dictionary<uint, NetworkIdentityComponent> __identities;
-
-#if DEBUG
-        private Dictionary<uint, uint> __frameIndices;
-
-        public virtual uint frameIndex => (uint)Time.frameCount;
-#endif
 
         public NetworkConnection.State connectionState => client.connectionState;
 
@@ -195,7 +233,7 @@ namespace ZG
 
                     //instance.gameObject.SetActive(false);
 
-                    _Init(bufferToInit.instance);
+                    __Init(bufferToInit.instance);
 
                     if (bufferToInit.instance._onCreate != null)
                         bufferToInit.instance._onCreate();
@@ -299,7 +337,12 @@ namespace ZG
             return true;
         }
 
-        public virtual void Shutdown()
+        public void Awake()
+        {
+            __wrapper = GetComponent<INetworkClientWrapper>();
+        }
+
+        public void Shutdown()
         {
             __Shutdown();
         }
@@ -458,7 +501,232 @@ namespace ZG
             return result;
         }
 
-        protected void LateUpdate()
+        private void __Init(NetworkIdentityComponent identity)
+        {
+            if (__wrapper == null)
+                identity.gameObject.SetActive(true);
+            else
+                __wrapper.Init(identity);
+        }
+
+        private NetworkIdentityComponent __GetIdentity(uint id)
+        {
+            if (__wrapper == null)
+            {
+                if (__identities != null && __identities.TryGetValue(id, out var instance))
+                    return instance;
+
+                return null;
+            }
+
+            return __wrapper.GetIdentity(id);
+        }
+
+        private void __Destroy(NetworkIdentityComponent identity, NetworkReader reader)
+        {
+            if(__wrapper == null)
+                Destroy(identity.gameObject);
+            else
+                __wrapper.Destroy(identity, reader);
+        }
+
+        private bool __Create(bool isLocalPlayer, int type, uint id, NetworkReader reader, ref INetworkClientCreateRequest request)
+        {
+            if (__wrapper == null)
+            {
+                return false;
+                /*if (request != null)
+                    return false;
+
+                var createRequest = new CreateRequest();
+
+                var prefab = prefabs == null || type < 0 || type >= prefabs.Length ? null : prefabs[type];
+                var instance = prefab == null ? null : Instantiate(prefab);
+
+                createRequest.instance = instance;
+
+                request = createRequest;
+
+                return true;*/
+            }
+
+            return __wrapper.Create(isLocalPlayer, type, id, reader, ref request);
+        }
+
+        private bool __Create(uint id, uint identity, NetworkReader reader)
+        {
+            if (__identities != null && __identities.ContainsKey(id))
+            {
+                Debug.LogError("[__Create]Fail.");
+
+                return false;
+            }
+
+            if (__buffersToCreate == null)
+                __buffersToCreate = new Dictionary<uint, BufferToCreate>();
+
+            if(__buffersToCreate.TryGetValue(id, out var buffer))
+            {
+                if (buffer.identity == identity)
+                    return false;
+            }
+            /*else
+            {
+                ++__createOrder;
+
+                if (__indicesToCreate == null)
+                    __indicesToCreate = new SortedList<uint, uint>();
+
+                __indicesToCreate.Add(__createOrder, id);
+
+                buffer.order = __createOrder;
+            }*/
+
+            buffer.identity = identity;
+
+            if (__Create(NetworkIdentity.IsLocalPlayer(identity), NetworkIdentity.GetType(identity), id, reader, ref buffer.request))
+            {
+                __buffersToCreate[id] = buffer;
+
+                return true;
+            }
+
+            Debug.LogError("[__Create]Fail.");
+
+            return false;
+        }
+
+        private void __RPC(uint id)
+        {
+            if (__buffersToCreate != null && __buffersToCreate.ContainsKey(id) || 
+                __buffersToInit != null && __buffersToInit.ContainsKey(id))
+                return;
+
+            try
+            {
+                var client = this.client;
+                using (var buffer = client.Receive(id))
+                {
+                    while (true)
+                    {
+                        switch (buffer.ReadMessage(out var reader, out uint identity))
+                        {
+                            case NetworkMessageType.RPC:
+                                var instance = __GetIdentity(id);
+                                if (instance is NetworkIdentityComponent)
+                                    instance.InvokeHandler(reader.ReadPackedUInt(), client.connection, reader);
+                                else
+                                    Debug.LogError($"RPC Error: {id} : {reader.ReadPackedUInt()}");
+                                break;
+                            case NetworkMessageType.Register:
+                                if(__Create(id, identity, reader))
+                                    return;
+
+                                break;
+                            case NetworkMessageType.Unregister:
+                                if (__identities != null && __identities.TryGetValue(id, out instance))
+                                {
+                                    if (instance is NetworkIdentityComponent)
+                                    {
+                                        if (instance._onDestroy != null)
+                                            instance._onDestroy();
+                                    }
+
+                                    __identities.Remove(id);
+
+                                    __Destroy(instance, reader);
+                                }
+                                else
+                                    Debug.LogError($"Unregister Error: {id}");
+                                break;
+                            default:
+                                return;
+                        }
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+            }
+        }
+
+        private void __Clear()
+        {
+            if (__identities != null)
+            {
+                NetworkIdentityComponent instance;
+                foreach (var pair in __identities)
+                {
+                    instance = pair.Value;
+
+                    if (instance is NetworkIdentityComponent)
+                    {
+                        if (instance._onDestroy != null)
+                            instance._onDestroy();
+                    }
+
+                    __Destroy(instance, default);
+                }
+
+                __identities.Clear();
+            }
+
+            if (__buffersToInit != null)
+            {
+                foreach (var bufferToInit in __buffersToInit)
+                    __Destroy(bufferToInit.Value.instance, default);
+
+                __buffersToInit.Clear();
+            }
+
+            if (__buffersToCreate != null)
+            {
+                foreach (var bufferToCreate in __buffersToCreate)
+                    __Destroy(bufferToCreate.Value.request.instance, default);
+
+                __buffersToCreate.Clear();
+            }
+
+            /*if (__indicesToCreate != null)
+                __indicesToCreate.Clear();
+
+            __createOrder = 0;*/
+
+            isConnected = false;
+        }
+
+        private void __Connect()
+        {
+            isConnected = true;
+
+            if (onConnect != null)
+                onConnect();
+        }
+
+        private void __Disconnect(DisconnectReason reason)
+        {
+            __Clear();
+
+            if (onDisconnect != null)
+                onDisconnect(reason);
+        }
+
+        private void __Shutdown()
+        {
+            __Clear();
+
+            var client = this.client;
+            if (client.connectionState != NetworkConnection.State.Disconnected)
+                client.Shutdown();
+        }
+
+        private bool __IsUpdate(long ticks)
+        {
+            return DateTime.UtcNow.Ticks - ticks < maxUpdateTicksPerFrame;
+        }
+
+        void LateUpdate()
         {
             var client = this.client;
 
@@ -521,7 +789,7 @@ namespace ZG
             }
         }
 
-        protected void OnDestroy()
+        void OnDestroy()
         {
             if (__pipelines.IsCreated)
                 __pipelines.Dispose();
@@ -530,219 +798,5 @@ namespace ZG
                 __ids.Dispose();
         }
 
-        protected virtual void _Init(NetworkIdentityComponent identity)
-        {
-            identity.gameObject.SetActive(true);
-        }
-
-        protected virtual NetworkIdentityComponent _GetIdentity(uint id)
-        {
-            if (__identities != null && __identities.TryGetValue(id, out var instance))
-                return instance;
-
-            return null;
-        }
-
-        protected virtual void _Destroy(NetworkIdentityComponent identity, NetworkReader reader)
-        {
-            Destroy(identity.gameObject);
-        }
-
-        protected virtual bool _Create(bool isLocalPlayer, int type, uint id, NetworkReader reader, ref ICreateRequest request)
-        {
-            if (request != null)
-                return false;
-
-            var createRequest = new CreateRequest();
-
-            var prefab = prefabs == null || type < 0 || type >= prefabs.Length ? null : prefabs[type];
-            var instance = prefab == null ? null : Instantiate(prefab);
-
-            createRequest.instance = instance;
-
-            request = createRequest;
-
-            return true;
-        }
-
-        private bool __Create(uint id, uint identity, NetworkReader reader)
-        {
-            if (__identities != null && __identities.ContainsKey(id))
-            {
-                Debug.LogError("[__Create]Fail.");
-
-                return false;
-            }
-
-            if (__buffersToCreate == null)
-                __buffersToCreate = new Dictionary<uint, BufferToCreate>();
-
-            if(__buffersToCreate.TryGetValue(id, out var buffer))
-            {
-                if (buffer.identity == identity)
-                    return false;
-            }
-            /*else
-            {
-                ++__createOrder;
-
-                if (__indicesToCreate == null)
-                    __indicesToCreate = new SortedList<uint, uint>();
-
-                __indicesToCreate.Add(__createOrder, id);
-
-                buffer.order = __createOrder;
-            }*/
-
-            buffer.identity = identity;
-
-            if (_Create(NetworkIdentity.IsLocalPlayer(identity), NetworkIdentity.GetType(identity), id, reader, ref buffer.request))
-            {
-                __buffersToCreate[id] = buffer;
-
-#if DEBUG
-                if (__frameIndices == null)
-                    __frameIndices = new Dictionary<uint, uint>();
-
-                __frameIndices[id] = frameIndex;
-#endif
-
-                return true;
-            }
-
-            Debug.LogError("[__Create]Fail.");
-
-            return false;
-        }
-
-        private void __RPC(uint id)
-        {
-            if (__buffersToCreate != null && __buffersToCreate.ContainsKey(id) || 
-                __buffersToInit != null && __buffersToInit.ContainsKey(id))
-                return;
-
-            try
-            {
-                var client = this.client;
-                using (var buffer = client.Receive(id))
-                {
-                    while (true)
-                    {
-                        switch (buffer.ReadMessage(out var reader, out uint identity))
-                        {
-                            case NetworkMessageType.RPC:
-                                var instance = _GetIdentity(id);
-                                if (instance is NetworkIdentityComponent)
-                                    instance.InvokeHandler(reader.ReadPackedUInt(), client.connection, reader);
-                                else
-                                    Debug.LogError($"RPC Error: {id} : {reader.ReadPackedUInt()}");
-                                break;
-                            case NetworkMessageType.Register:
-                                if(__Create(id, identity, reader))
-                                    return;
-
-                                break;
-                            case NetworkMessageType.Unregister:
-                                if (__identities != null && __identities.TryGetValue(id, out instance))
-                                {
-                                    if (instance is NetworkIdentityComponent)
-                                    {
-                                        if (instance._onDestroy != null)
-                                            instance._onDestroy();
-                                    }
-
-                                    __identities.Remove(id);
-
-                                    _Destroy(instance, reader);
-                                }
-                                else
-                                    Debug.LogError($"Unregister Error: {id}");
-                                break;
-                            default:
-                                return;
-                        }
-                    }
-                }
-            }
-            catch (Exception e)
-            {
-                Debug.LogException(e);
-            }
-        }
-
-        private void __Clear()
-        {
-            if (__identities != null)
-            {
-                NetworkIdentityComponent instance;
-                foreach (var pair in __identities)
-                {
-                    instance = pair.Value;
-
-                    if (instance is NetworkIdentityComponent)
-                    {
-                        if (instance._onDestroy != null)
-                            instance._onDestroy();
-                    }
-
-                    _Destroy(instance, default);
-                }
-
-                __identities.Clear();
-            }
-
-            if (__buffersToInit != null)
-            {
-                foreach (var bufferToInit in __buffersToInit)
-                    _Destroy(bufferToInit.Value.instance, default);
-
-                __buffersToInit.Clear();
-            }
-
-            if (__buffersToCreate != null)
-            {
-                foreach (var bufferToCreate in __buffersToCreate)
-                    _Destroy(bufferToCreate.Value.request.instance, default);
-
-                __buffersToCreate.Clear();
-            }
-
-            /*if (__indicesToCreate != null)
-                __indicesToCreate.Clear();
-
-            __createOrder = 0;*/
-
-            isConnected = false;
-        }
-
-        private void __Connect()
-        {
-            isConnected = true;
-
-            if (onConnect != null)
-                onConnect();
-        }
-
-        private void __Disconnect(DisconnectReason reason)
-        {
-            __Clear();
-
-            if (onDisconnect != null)
-                onDisconnect(reason);
-        }
-
-        private void __Shutdown()
-        {
-            __Clear();
-
-            var client = this.client;
-            if (client.connectionState != NetworkConnection.State.Disconnected)
-                client.Shutdown();
-        }
-
-        public bool __IsUpdate(long ticks)
-        {
-            return DateTime.UtcNow.Ticks - ticks < maxUpdateTicksPerFrame;
-        }
     }
 }
