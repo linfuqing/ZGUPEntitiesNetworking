@@ -40,6 +40,8 @@ namespace ZG
 
         NetworkConnection.State connectionState { get; }
 
+        int identityCount { get; }
+
         NetworkIdentityComponent GetIdentity(uint id);
 
         void Configure(NativeArray<NetworkPipelineType> pipelineTypes);
