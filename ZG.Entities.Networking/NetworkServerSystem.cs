@@ -148,7 +148,7 @@ namespace ZG
                                         @event.connection = connection;
                                         @event.id = id;
 
-                                        events.AddNoResizeEx(@event);
+                                        events.AddNoResize(@event);
                                     }
 
                                     message._block = buffer.WriteBlock(stream.Length - stream.GetBytesRead(), false);
@@ -165,7 +165,7 @@ namespace ZG
                                         @event.connection = connection;
                                         @event.id = id;
 
-                                        events.AddNoResizeEx(@event);
+                                        events.AddNoResize(@event);
 
                                         message._block = buffer.WriteBlock(stream.Length - stream.GetBytesRead(), false);
 
@@ -182,7 +182,7 @@ namespace ZG
 
                                     stream.ReadBytes(message._block.AsArray<byte>());
 
-                                    messages.AddNoResizeEx(message);
+                                    messages.AddNoResize(message);
                                     break;
                             }
 
@@ -192,7 +192,7 @@ namespace ZG
 
                             message._block = default;
 
-                            messages.AddNoResizeEx(message);
+                            messages.AddNoResize(message);
                             break;
                         case NetworkEvent.Type.Disconnect:
                             __Disconnect(connection, (DisconnectReason)stream.ReadByte(), message.index);
@@ -216,7 +216,7 @@ namespace ZG
                     @event.connection = connection;
                     @event.id = id;
 
-                    events.AddNoResizeEx(@event);
+                    events.AddNoResize(@event);
 
                     message.type = (uint)NetworkMessageType.Unregister;
                     message._block = default;
@@ -233,7 +233,7 @@ namespace ZG
                 var writer = message._block.writer;
                 writer.Write((byte)disconnectReason);
 
-                messages.AddNoResizeEx(message);
+                messages.AddNoResize(message);
             }
         }
 
@@ -510,7 +510,7 @@ namespace ZG
             popEvents.driver = driverConcurrent;
             popEvents.buffer = __buffer.parallelWriter;
             popEvents.idCount = __idCount;
-            popEvents.connections = __connections.AsDeferredJobArrayEx();
+            popEvents.connections = __connections.AsDeferredJobArray();
             popEvents.ids = __ids;
             popEvents.events = __events.AsParallelWriter();
             popEvents.messages = __messages.AsParallelWriter();
@@ -520,8 +520,8 @@ namespace ZG
             DispatchEvents dispatchEvents;
             dispatchEvents.driver = driver;
             dispatchEvents.connections = __connections;
-            dispatchEvents.events = __events.AsDeferredJobArrayEx();
-            dispatchEvents.messages = __messages.AsDeferredJobArrayEx();
+            dispatchEvents.events = __events.AsDeferredJobArray();
+            dispatchEvents.messages = __messages.AsDeferredJobArray();
             dispatchEvents.ids = __ids;
             jobHandle = dispatchEvents.Schedule(jobHandle);
 

@@ -221,6 +221,8 @@ namespace ZG
             return readOnly;
         }
 
+        public int CountOfIDNodes() => __idNodes.Count();
+
         public bool TryGetNode(uint id, out T value)
         {
             if (__identities.TryGetValue(id, out var identity))

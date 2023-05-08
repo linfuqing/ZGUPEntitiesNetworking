@@ -481,7 +481,7 @@ namespace ZG
             acceptConnections.talkingResults = __talkingResults;
             jobHandle = acceptConnections.Schedule(jobHandle);
 
-            var connections = __connections.AsDeferredJobArrayEx();
+            var connections = __connections.AsDeferredJobArray();
 
             PopEvents popEvents;
             popEvents.model = StreamCompressionModel.Default;
