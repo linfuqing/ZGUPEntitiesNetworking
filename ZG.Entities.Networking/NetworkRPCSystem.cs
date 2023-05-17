@@ -3104,7 +3104,7 @@ namespace ZG
         {
             __buffer = new NativeBuffer(allocator, 1);
 
-            __rpcBufferCount = new NativeArray<int>(1, (Allocator)allocator.Value, NativeArrayOptions.ClearMemory);
+            __rpcBufferCount = new NativeArray<int>(1, allocator.ToAllocator, NativeArrayOptions.ClearMemory);
 
             __activeEvents = new NativeList<ActiveEvent>(allocator);
 
