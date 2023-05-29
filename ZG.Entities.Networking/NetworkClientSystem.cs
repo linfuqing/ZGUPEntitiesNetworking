@@ -4,7 +4,7 @@ using Unity.Entities;
 using Unity.Collections;
 using Unity.Networking.Transport;
 using Unity.Networking.Transport.Error;
-using System.Diagnostics;
+using Unity.Collections.LowLevel.Unsafe;
 
 namespace ZG
 {
@@ -367,13 +367,13 @@ namespace ZG
 
         public NativeHashMap<uint, UnsafeBuffer> buffers => __buffers;
 
-        public NetworkClient(Allocator allocator)
+        public NetworkClient(in AllocatorManager.AllocatorHandle allocator)
         {
             __driver = NetworkDriver.Create();
 
             __buffer = new NativeBuffer(allocator, 1);
 
-            __connections = new NativeArray<NetworkConnection>(1, allocator, NativeArrayOptions.ClearMemory);
+            __connections = new NativeArray<NetworkConnection>(1, allocator.ToAllocator, NativeArrayOptions.ClearMemory);
 
             __messages = new NativeList<Message>(allocator);
 
@@ -525,41 +525,73 @@ namespace ZG
         }
     }
 
-    [AutoCreateIn("Client")]
-    public partial class NetworkClientSystem : SystemBase
+    public struct NetworkClientManager : IComponentData
     {
-        public LookupJobManager lookupJobManager;
+        private UnsafeList<LookupJobManager> __lookupJobManager;
+
+        public bool isCreated => __lookupJobManager.IsCreated;
+
+        public ref LookupJobManager lookupJobManager => ref __lookupJobManager.ElementAt(0);
 
         public NetworkClient client
+        {
+            get;
+        }
+
+        public NetworkClientManager(in AllocatorManager.AllocatorHandle allocator)
+        {
+            __lookupJobManager = new UnsafeList<LookupJobManager>(1, allocator, NativeArrayOptions.UninitializedMemory);
+            __lookupJobManager.Resize(1, NativeArrayOptions.ClearMemory);
+
+            client = new NetworkClient(allocator);
+        }
+
+        public void Dispose()
+        {
+            lookupJobManager.CompleteReadWriteDependency();
+
+            __lookupJobManager.Dispose();
+
+            client.Dispose();
+        }
+
+        public JobHandle Update(in JobHandle inputDeps)
+        {
+            var jobHandle = JobHandle.CombineDependencies(lookupJobManager.readWriteJobHandle, inputDeps);
+            jobHandle = client.ScheduleUpdate(jobHandle);
+
+            lookupJobManager.readWriteJobHandle = jobHandle;
+
+            return jobHandle;
+        }
+    }
+
+    [AutoCreateIn("Client"), BurstCompile]
+    public partial struct NetworkClientSystem : ISystem
+    {
+        public NetworkClientManager manager
         {
             get;
 
             private set;
         }
 
-        public NetworkClientSystem()
+        //[BurstCompile]
+        public void OnCreate(ref SystemState state)
         {
-            client = new NetworkClient(Allocator.Persistent);
+            manager = new NetworkClientManager(Allocator.Persistent);
         }
 
-        protected override void OnDestroy()
+        [BurstCompile]
+        public void OnDestroy(ref SystemState state)
         {
-            lookupJobManager.CompleteReadWriteDependency();
-
-            client.Dispose();
-
-            base.OnDestroy();
+            manager.Dispose();
         }
 
-        protected override void OnUpdate()
+        [BurstCompile]
+        public void OnUpdate(ref SystemState state)
         {
-            var jobHandle = JobHandle.CombineDependencies(lookupJobManager.readWriteJobHandle, Dependency);
-
-            jobHandle = client.ScheduleUpdate(jobHandle);
-
-            lookupJobManager.readWriteJobHandle = jobHandle;
-
-            Dependency = jobHandle;
+            state.Dependency = manager.Update(state.Dependency);
         }
     }
 }

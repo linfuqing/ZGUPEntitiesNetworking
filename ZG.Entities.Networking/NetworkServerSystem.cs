@@ -544,14 +544,11 @@ namespace ZG
 
         public static EntityQuery GetEntityQuery(ref SystemState state)
         {
-            return state.GetEntityQuery(new EntityQueryDesc()
-            {
-                All = new ComponentType[]
-                {
-                    ComponentType.ReadOnly<NetworkServerManager>(),
-                },
-                Options = EntityQueryOptions.IncludeSystems
-            });
+            using (var builder = new EntityQueryBuilder(Allocator.Temp))
+                return builder
+                    .WithAll<NetworkServerManager>()
+                    .WithOptions(EntityQueryOptions.IncludeSystems)
+                    .Build(ref state);
         }
 
         public NetworkServerManager(AllocatorManager.AllocatorHandle allocator, in NetworkSettings settings)
@@ -615,10 +612,12 @@ namespace ZG
             return manager;
         }
 
+        [BurstCompile]
         public void OnCreate(ref SystemState state)
         {
         }
 
+        [BurstCompile]
         public void OnDestroy(ref SystemState state)
         {
             if (manager.isCreated)

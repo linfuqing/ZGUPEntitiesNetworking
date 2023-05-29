@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Unity.Entities;
 using Unity.Networking.Transport;
+using UnityEngine;
 using NetworkReader = Unity.Collections.DataStreamReader;
 using NetworkWriter = Unity.Collections.DataStreamWriter;
 
@@ -149,6 +150,23 @@ namespace ZG
             {
                 _onDestroy -= value;
             }
+        }
+
+        public NetworkIdentityComponent Instantiate(
+            in Quaternion rotation,
+            in Vector3 position,
+            uint id, 
+            uint value)
+        {
+            ref var manager = ref world.GetOrCreateSystemUnmanaged<NetworkEntityManager>();
+
+            Entity prefab = manager.Register(id);
+            NetworkIdentity identity;
+            identity.id = id;
+            identity.value = value;
+            manager.factory.SetComponentData(prefab, identity);
+
+            return GameObjectEntity.Instantiate(this, null, position, rotation, prefab);
         }
 
         public bool InvokeHandler(uint handle, in NetworkConnection connection, NetworkReader reader)

@@ -3694,6 +3694,7 @@ namespace ZG
 
         private EntityQuery __managerGroup;
 
+        [BurstCompile]
         public void OnCreate(ref SystemState state)
         {
             __managerGroup = NetworkServerManager.GetEntityQuery(ref state);
@@ -3701,6 +3702,7 @@ namespace ZG
             state.EntityManager.AddComponentData(state.SystemHandle, controller = new NetworkRPCController(Allocator.Persistent));
         }
 
+        [BurstCompile]
         public void OnDestroy(ref SystemState state)
         {
             controller.Dispose();

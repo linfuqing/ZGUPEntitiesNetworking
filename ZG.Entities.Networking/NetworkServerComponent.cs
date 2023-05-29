@@ -20,18 +20,12 @@ namespace ZG
         bool Register(
             NetworkReader reader,
             in NetworkConnection connection,
-            ref NetworkIdentityComponent identity,
             ref uint id,
-            out int type,
             out int node,
             out int layerMask,
             out float visibilityDistance);
 
         bool Unregister(uint id, in NetworkConnection connection, NetworkReader reader);
-
-        NetworkIdentityComponent Create(uint id, int type);
-
-        void Destroy(NetworkIdentityComponent identity);
 
         bool Init(bool isNew, uint sourceID, uint destinationID, ref NetworkWriter writer);
 
@@ -63,9 +57,9 @@ namespace ZG
 
         NetworkConnection GetConnection(uint id);
 
-        NetworkIdentityComponent GetIdentity(uint id);
+        NetworkIdentityComponent GetIdentity(uint id, bool isRegisteredOnly = true);
 
-        bool Register(NetworkIdentityComponent identity, NetworkReader reader);
+        bool Register(uint id, NetworkReader reader);
 
         bool Unregister(uint id, NetworkReader reader);
 
@@ -98,6 +92,16 @@ namespace ZG
         void RegisterHandler(uint messageType, NetworkServerHandler handler);
 
         uint CreateNewID();
+
+        NetworkIdentityComponent Instantiate(
+            NetworkIdentityComponent prefab,
+            in Quaternion rotation,
+            in Vector3 position,
+            int type,
+            uint id, 
+            in NetworkConnection connection = default);
+
+        void Destroy(uint id);
 
         bool TryGetNode(uint id, out int node);
 
@@ -237,7 +241,7 @@ namespace ZG
             }
         }
 
-        public NetworkRPCManager<int> manager
+        public NetworkRPCManager<int> rpcManager
         {
             get
             {
@@ -261,11 +265,23 @@ namespace ZG
             }
         }
 
+        public ref NetworkEntityManager entityManager
+        {
+            get
+            {
+                var controller = __GetController();
+
+                controller.lookupJobManager.CompleteReadWriteDependency();
+
+                return ref world.GetOrCreateSystemUnmanaged< NetworkEntityManager>();
+            }
+        }
+
         public bool IsExclusiveTransaction(uint id) => __exclusiveTransactionIdentityIDs != null && __exclusiveTransactionIdentityIDs.Contains(id);
 
         public bool IsPlayer(uint id)
         {
-            return manager.GetConnection(id).IsCreated;
+            return rpcManager.GetConnection(id).IsCreated;
         }
 
         public bool IsConnected(in NetworkConnection connection)
@@ -280,12 +296,12 @@ namespace ZG
 
         public NetworkConnection GetConnection(uint id)
         {
-            return manager.GetConnection(id);
+            return rpcManager.GetConnection(id);
         }
 
-        public NetworkIdentityComponent GetIdentity(uint id)
+        public NetworkIdentityComponent GetIdentity(uint id, bool isRegisteredOnly = true)
         {
-            return __identities != null && __identities.TryGetValue(id, out var value) ? value : null;
+            return __identities != null && __identities.TryGetValue(id, out var value) && (!isRegisteredOnly || value._host == (INetworkHost)this) ? value : null;
         }
 
         public uint CreateNewID()
@@ -293,14 +309,47 @@ namespace ZG
             return server.CreateNewID();
         }
 
+        public NetworkIdentityComponent Instantiate(
+            NetworkIdentityComponent prefab, 
+            in Quaternion rotation, 
+            in Vector3 position, 
+            int type,
+            uint id,
+            in NetworkConnection connection = default)
+        {
+            uint value = NetworkIdentity.SetLocalPlayer(type, server.driver.GetConnectionState(connection) == NetworkConnection.State.Connected);
+
+            var identity = prefab.Instantiate(
+                rotation,
+                position,
+                id,
+                value);
+
+            identity._host = null;
+
+            if (__identities == null)
+                __identities = new Dictionary<uint, NetworkIdentityComponent>();
+
+            __identities.Add(id, identity);
+
+            return identity;
+        }
+
+        public void Destroy(uint id)
+        {
+            Destroy(__identities[id].gameObject);
+
+            __identities.Remove(id);
+        }
+
         public bool TryGetNode(uint id, out int node)
         {
-            return manager.TryGetNode(id, out node);
+            return rpcManager.TryGetNode(id, out node);
         }
 
         public bool NodeContains(int node, uint id)
         {
-            var enumerator = manager.GetNodeIDs(node);
+            var enumerator = rpcManager.GetNodeIDs(node);
             while (enumerator.MoveNext())
             {
                 if (enumerator.Current == id)
@@ -377,9 +426,7 @@ namespace ZG
             if (__identities != null)
             {
                 foreach(var identity in __identities.Values)
-                    __Destroy(identity);
-
-                __identities.Clear();
+                    identity._host = null;
             }
 
             server.DisconnectAllConnections();
@@ -393,32 +440,27 @@ namespace ZG
         //注意：这些链接没有断开
         public bool Unregister(uint id, NetworkReader reader)
         {
-            return __Unregister(_defaultChannel, id, manager.GetConnection(id), reader);
+            return __Unregister(_defaultChannel, id, rpcManager.GetConnection(id), reader);
         }
 
-        public bool Register(NetworkIdentityComponent identity, NetworkReader reader)
+        public bool Register(uint id, NetworkReader reader)
         {
-            uint id = 0;
             if (!__Register(
                 reader, 
                 default, 
-                ref identity, 
                 ref id, 
-                out int type, 
                 out int node,
                 out int layerMask,
                 out float visibilityDistance))
                 return false;
 
             return __Register(
+                id,
                 _defaultChannel, 
-                id, 
-                type, 
                 node, 
                 layerMask, 
                 visibilityDistance, 
-                default, 
-                identity);
+                default);
         }
 
         public bool Move(uint id, int node, int layerMask, float visibilityDistance)
@@ -563,16 +605,13 @@ namespace ZG
         private bool __Register(
             NetworkReader reader,
             in NetworkConnection connection,
-            ref NetworkIdentityComponent identity,
             ref uint id, 
-            out int type,
             out int node,
             out int layerMask,
             out float visibilityDistance)
         {
             if (__wrapper == null)
             {
-                type = 0;
                 node = 0;
                 layerMask = ~0;
                 visibilityDistance = 0.0f;
@@ -580,25 +619,7 @@ namespace ZG
                 return true;
             }
 
-            return __wrapper.Register(reader, connection, ref identity, ref id, out type, out node, out layerMask, out visibilityDistance);
-        }
-
-        private NetworkIdentityComponent __Create(uint id, int type)
-        {
-            return __wrapper == null ? null : __wrapper.Create(id, type);
-            /*int numPrefabs = prefabs == null ? 0 : prefabs.Length;
-            return numPrefabs > type ? Instantiate(prefabs[type]) : (numPrefabs == 1 ? Instantiate(prefabs[0]) : null);*/
-        }
-
-        private void __Destroy(NetworkIdentityComponent identity)
-        {
-            if (__wrapper == null)
-            {
-                if (identity != null)
-                    Destroy(identity.gameObject);
-            }
-            else
-                __wrapper.Destroy(identity);
+            return __wrapper.Register(reader, connection, ref id, out node, out layerMask, out visibilityDistance);
         }
 
         private bool __Init(bool isNew, uint sourceID, uint destinationID, ref NetworkWriter writer)
@@ -627,27 +648,20 @@ namespace ZG
         {
             if (__identities != null && __identities.TryGetValue(id, out var identity))
             {
-                bool isCreated = __exclusiveTransactionIdentityIDs == null || !__exclusiveTransactionIdentityIDs.Remove(id);
-                int type = 0;
-                if (identity is NetworkIdentityComponent)
+                int type = identity.type;
+
+                identity.isLocalPlayer = false;
+
+                if (__exclusiveTransactionIdentityIDs == null || !__exclusiveTransactionIdentityIDs.Remove(id))
                 {
-                    type = identity.type;
-
-                    identity.isLocalPlayer = false;
-
-                    if (isCreated)
-                    {
-                        if (identity._onDestroy != null)
-                            identity._onDestroy();
-                    }
+                    if (identity._onDestroy != null)
+                        identity._onDestroy();
                 }
 
                 var commander = this.commander;
                 if (__Unregister(id, connection, reader))
                 {
-                    __identities.Remove(id);
-
-                    __Destroy(identity);
+                    identity._host = null;
 
                     if (commander.BeginCommand(id, __pipelines[channel], server.driver, out var writer))
                     {
@@ -700,13 +714,10 @@ namespace ZG
             //if (server.connectionCount < maxPlayerCount)
             {
                 uint originID = id;
-                NetworkIdentityComponent identity = null;
                 if (!__Register(
                     reader, 
                     connection, 
-                    ref identity,
                     ref id,
-                    out int type, 
                     out int node, 
                     out int layerMask, 
                     out float visibilityDistance))
@@ -718,9 +729,7 @@ namespace ZG
                     ids[connection] = id;
                 }
 
-                __Register(channel, id, type, node, layerMask, visibilityDistance, connection, identity);
-
-                return true;
+                return __Register(id, channel, node, layerMask, visibilityDistance, connection);
             }
 
             /*server.driver.Disconnect(connection);
@@ -731,67 +740,16 @@ namespace ZG
         }
 
         private bool __Register(
-            int channel, 
             uint id, 
-            int type,
+            int channel, 
             int node,
             int layerMask, 
             float visibilityDistance, 
-            in NetworkConnection connection,
-            NetworkIdentityComponent instance)
+            in NetworkConnection connection)
         {
-            bool isReconnect;
-            var target = GetIdentity(id);
-            if (instance == null)
-            {
-                if (target == null)
-                {
-                    target = __Create(id, type);
-                    if (target == null)
-                    {
-                        Debug.LogError("Register Fail: Instantiate Error.");
+            var target = __identities[id];
 
-                        return false;
-                    }
-
-                    isReconnect = false;
-                }
-                else
-                {
-                    var targetConnection = manager.GetConnection(target.id);
-                    if (targetConnection.IsCreated && targetConnection != connection)
-                    {
-                        Debug.LogError("Register Fail: Index Conflict.");
-
-                        return false;
-                    }
-
-                    isReconnect = true;
-                }
-            }
-            else
-            {
-                if (target == null)
-                    isReconnect = false;
-                else
-                {
-                    if (target != instance)
-                    {
-                        Debug.LogError($"{instance} Copy From {target}");
-
-                        //instance.SetComponentData(target.identity);
-
-                        if (target._onDestroy != null)
-                            target._onDestroy();
-
-                        __Destroy(target);
-                    }
-
-                    isReconnect = true;
-                }
-
-                target = instance;
-            }
+            int type = target.type;
 
             var pipeline = __pipelines[channel];
             var driver = server.driver;
@@ -800,7 +758,7 @@ namespace ZG
                 __SendRegisterMessage(ref writer, id);
 
                 int result;
-                if (isReconnect)
+                if ((INetworkHost)this == target._host)
                 {
                     result = commander.EndCommandConnect(type, connection, writer);
                     if (result < 0)
@@ -834,18 +792,19 @@ namespace ZG
             target.name = target.name.Replace("(Clone)", "(" + id + ')');
 #endif
 
-            NetworkIdentity identity;
+            /*NetworkIdentity identity;
             identity.id = id;
             identity.value = NetworkIdentity.SetLocalPlayer(type, driver.GetConnectionState(connection) == NetworkConnection.State.Connected);
 
+            target.SetComponentData(identity);*/
+
             target._host = this;
+            target.isLocalPlayer = driver.GetConnectionState(connection) == NetworkConnection.State.Connected;
 
-            target.SetComponentData(identity);
-
-            if (__identities == null)
+            /*if (__identities == null)
                 __identities = new Dictionary<uint, NetworkIdentityComponent>();
 
-            __identities[id] = target;
+            __identities[id] = target;*/
 
             if (isExclusivingTransaction)
             {

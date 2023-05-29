@@ -115,7 +115,7 @@ namespace ZG
 
         private bool __isBusy;
         private INetworkClientWrapper __wrapper;
-        private NetworkClientSystem __system;
+        private NetworkClientManager __manager;
         private NativeArray<NetworkPipeline> __pipelines;
         private NativeList<uint> __ids;
         private Dictionary<uint, Action<NetworkReader>> __handlers;
@@ -159,16 +159,16 @@ namespace ZG
         {
             get
             {
-                if(__system == null)
+                if(!__manager.isCreated)
                 {
                     var world = WorldUtility.GetOrCreateWorld(_worldName);
 
-                    __system = world.GetOrCreateSystemManaged<NetworkClientSystem>();
+                    __manager = world.GetOrCreateSystemUnmanaged<NetworkClientSystem>().manager;
                 }
 
-                __system.lookupJobManager.CompleteReadWriteDependency();
+                __manager.lookupJobManager.CompleteReadWriteDependency();
 
-                return __system.client;
+                return __manager.client;
             }
         }
 
@@ -615,7 +615,7 @@ namespace ZG
                         {
                             case NetworkMessageType.RPC:
                                 var instance = __GetIdentity(id);
-                                if (instance is NetworkIdentityComponent)
+                                if (instance != null)
                                     instance.InvokeHandler(reader.ReadPackedUInt(), client.connection, reader);
                                 else
                                     Debug.LogError($"RPC Error: {id} : {reader.ReadPackedUInt()}");
