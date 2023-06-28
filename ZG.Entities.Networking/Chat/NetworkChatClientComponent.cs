@@ -22,7 +22,7 @@ namespace ZG
             get
             {
                 if (__system == null)
-                    __system = WorldUtility.GetOrCreateWorld(_worldName).GetOrCreateSystemManaged<NetworkChatClientSystem>();
+                    __system = WorldUtility.GetWorld(_worldName).GetOrCreateSystemManaged<NetworkChatClientSystem>();
 
                 __system.lookupJobManager.CompleteReadWriteDependency();
 

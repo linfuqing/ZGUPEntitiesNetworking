@@ -161,7 +161,7 @@ namespace ZG
             {
                 if(!__manager.isCreated)
                 {
-                    var world = WorldUtility.GetOrCreateWorld(_worldName);
+                    var world = WorldUtility.GetWorld(_worldName);
 
                     __manager = world.GetOrCreateSystemUnmanaged<NetworkClientSystem>().manager;
                 }
