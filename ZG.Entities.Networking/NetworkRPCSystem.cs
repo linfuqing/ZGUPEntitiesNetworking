@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using Unity.Jobs;
 using Unity.Burst;
 using Unity.Entities;
@@ -8,9 +7,7 @@ using Unity.Collections.LowLevel.Unsafe;
 using Unity.Mathematics;
 using Unity.Networking.Transport;
 using Unity.Networking.Transport.Error;
-using ZG.Unsafe;
-using static ZG.NetworkClient;
-using UnityEngine;
+using Debug = UnityEngine.Debug;
 
 namespace ZG
 {
@@ -1714,6 +1711,7 @@ namespace ZG
                 unregisterMessage.versions = versions;
 #endif
 
+                UnsafeParallelHashSet<uint> nodeIDs = default;
                 NativeHashSet<uint> idsToBeChanged = default;
                 //NativeParallelHashMap<int, float> nodeDistances = default;
                 NativeParallelMultiHashMapIterator<uint> iterator;
@@ -1855,11 +1853,57 @@ namespace ZG
 
                             unregisterMessage.bytes = unregisterCommand.bufferSegment.GetArray(buffer);
 
-                            if(manager.Unregister(
+#if DEBUG
+                            if (nodeIDs.IsCreated)
+                                nodeIDs.Clear();
+
+                            layerMask = manager.GetLayerMask(id);
+                            if (layerMask != 0)
+                            {
+                                foreach (int idNode in manager.GetIDNodes(id))
+                                {
+                                    foreach (var nodeIdentity in manager.GetNodeIdentities(idNode))
+                                    {
+                                        if (((1 << nodeIdentity.layer) & layerMask) != 0)
+                                        {
+                                            if (!nodeIDs.IsCreated)
+                                                nodeIDs = new UnsafeParallelHashSet<uint>(1, Allocator.Temp);
+
+                                            nodeIDs.Add(nodeIdentity.value);
+                                        }
+                                    }
+                                }
+                            }
+#endif
+                            if (manager.Unregister(
                                 id,
                                 ref driver,
                                 unregisterMessage))
+                            {
                                 types.Remove(id);
+
+#if DEBUG
+                                foreach(var nodeID in nodeIDs)
+                                {
+                                    Version version;
+                                    version.id = nodeID;
+
+                                    version.value = Version.Get(
+                                        versions,
+                                        nodeID,
+                                        id,
+                                        out iterator,
+                                        out version.isActive);
+
+                                    if (version.value != 0 && version.isActive)
+                                    {
+                                        version.isActive = false;
+
+                                        versions.SetValue(version, iterator);
+                                    }
+                                }
+#endif
+                            }
 
                             break;
                     }
@@ -1871,7 +1915,6 @@ namespace ZG
 
                 bool isConnected, isContans;
                 MoveCommand moveCommand;
-                UnsafeParallelHashSet<uint> nodeIDs = default;
                 //NativeParallelHashSet<uint> addIDs = default, removeIDs = default;
                 foreach(var pair in moveCommands)
                 {
