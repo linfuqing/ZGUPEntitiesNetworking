@@ -113,6 +113,7 @@ namespace ZG
 
         public long maxUpdateTicksPerFrame = TimeSpan.TicksPerMillisecond << 6;
 
+        private bool __isInitAndCreateSync;
         private bool __isBusy;
         private INetworkClientWrapper __wrapper;
         private NetworkClientManager __manager;
@@ -194,13 +195,7 @@ namespace ZG
 
         public void InitAndCreateSync()
         {
-            UnityEngine.Profiling.Profiler.BeginSample("Client Init");
-            while (InitNext() != null) ;
-            UnityEngine.Profiling.Profiler.EndSample();
-
-            UnityEngine.Profiling.Profiler.BeginSample("Client Create");
-            while (CreateNext(false) != null) ;
-            UnityEngine.Profiling.Profiler.EndSample();
+            __isInitAndCreateSync = true;
         }
 
         public NetworkIdentityComponent InitNext()
@@ -764,21 +759,40 @@ namespace ZG
                 }
             }
 
-            if (isConnected)
+            if (isConnected/* && GameObjectEntity.IsAllEntitiesDeserialized(GameObjectEntity.DeserializedType.InstanceOnly)*/)
             {
                 __isBusy = false;
 
-                long ticks = DateTime.UtcNow.Ticks;
+                //GameObjectEntity.IsAllEntitiesDeserialized(GameObjectEntity.DeserializedType.InstanceOnly);
 
-                UnityEngine.Profiling.Profiler.BeginSample("Client Init");
-                while (__IsUpdate(ticks) && InitNext() != null)
-                    __isBusy = true;
-                UnityEngine.Profiling.Profiler.EndSample();
+                //Debug.Log($"Deserialized Start {Time.frameCount}");
 
-                UnityEngine.Profiling.Profiler.BeginSample("Client Create");
-                while (__IsUpdate(ticks) && CreateNext(false) != null)
-                    __isBusy = true;
-                UnityEngine.Profiling.Profiler.EndSample();
+                if (__isInitAndCreateSync)
+                {
+                    __isInitAndCreateSync = false;
+
+                    UnityEngine.Profiling.Profiler.BeginSample("Client Init");
+                    while (InitNext() != null) ;
+                    UnityEngine.Profiling.Profiler.EndSample();
+
+                    UnityEngine.Profiling.Profiler.BeginSample("Client Create");
+                    while (CreateNext(false) != null) ;
+                    UnityEngine.Profiling.Profiler.EndSample();
+                }
+                else
+                {
+                    long ticks = DateTime.UtcNow.Ticks;
+
+                    UnityEngine.Profiling.Profiler.BeginSample("Client Init");
+                    while (__IsUpdate(ticks) && InitNext() != null)
+                        __isBusy = true;
+                    UnityEngine.Profiling.Profiler.EndSample();
+
+                    UnityEngine.Profiling.Profiler.BeginSample("Client Create");
+                    while (__IsUpdate(ticks) && CreateNext(false) != null)
+                        __isBusy = true;
+                    UnityEngine.Profiling.Profiler.EndSample();
+                }
 
                 if (__ids.IsCreated)
                     __ids.Clear();

@@ -43,6 +43,8 @@ namespace ZG
 
         public event Action<uint, bool> onActive;
 
+        bool isListening { get; }
+
         bool isExclusivingTransaction { get; }
 
         int maxConnectionCount { get; set; }
@@ -166,6 +168,8 @@ namespace ZG
         public event Action<uint, bool> onActive;
 
         public bool isConfigured => __pipelines.IsCreated;
+
+        public bool isListening => server.isListening;
 
         public bool isExclusivingTransaction
         {
