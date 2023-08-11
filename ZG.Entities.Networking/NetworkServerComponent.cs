@@ -277,7 +277,7 @@ namespace ZG
 
                 controller.lookupJobManager.CompleteReadWriteDependency();
 
-                return ref world.GetOrCreateSystemUnmanaged< NetworkEntityManager>();
+                return ref world.GetOrCreateSystemUnmanaged<NetworkEntityManager>();
             }
         }
 
@@ -844,7 +844,7 @@ namespace ZG
         private NetworkRPCController __GetController()
         {
             if (!__controller.isCreated)
-                __controller = world.GetOrCreateSystemUnmanaged<NetworkRPCFactorySystem>().controller;
+                __controller = world.GetExistingSystemUnmanaged<NetworkRPCFactorySystem>().controller;
 
             return __controller;
         }

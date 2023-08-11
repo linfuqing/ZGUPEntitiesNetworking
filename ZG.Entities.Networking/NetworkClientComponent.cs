@@ -164,7 +164,7 @@ namespace ZG
                 {
                     var world = WorldUtility.GetWorld(_worldName);
 
-                    __manager = world.GetOrCreateSystemUnmanaged<NetworkClientSystem>().manager;
+                    __manager = world.GetExistingSystemUnmanaged<NetworkClientSystem>().manager;
                 }
 
                 __manager.lookupJobManager.CompleteReadWriteDependency();
