@@ -155,7 +155,7 @@ namespace ZG
 
         private NativeArray<NetworkPipeline> __pipelines;
         private NativeList<uint> __ids;
-        private NativeList<NetworkServer.Message> __messages;
+        private NativeList<NetworkServerMessage> __messages;
 
         private Dictionary<uint, NetworkServerHandler> __handlers;
         private Dictionary<uint, NetworkIdentityComponent> __identities;
@@ -871,8 +871,8 @@ namespace ZG
             var server = this.server;
 
             NetworkServerHandler handler;
-            var messages = server.messagesReadOnly;
-            NetworkServer.Message message;
+            var messages = server.messages;
+            NetworkServerMessage message;
             int numMessages = messages.Length;
             for (int i = 0; i < numMessages; ++i)
             {
@@ -915,7 +915,7 @@ namespace ZG
                 if (__messages.IsCreated)
                     __messages.Clear();
                 else
-                    __messages = new NativeList<NetworkServer.Message>(Allocator.Persistent);
+                    __messages = new NativeList<NetworkServerMessage>(Allocator.Persistent);
 
                 server.Receive(id, ref __messages);
 

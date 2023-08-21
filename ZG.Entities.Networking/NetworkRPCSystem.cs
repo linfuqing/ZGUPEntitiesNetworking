@@ -3240,7 +3240,7 @@ namespace ZG
         public unsafe bool BeginCommand(
             uint id, 
             in NetworkPipeline pipeline, 
-            NetworkDriver driver, 
+            in NetworkDriver driver, 
             out DataStreamWriter stream)
         {
             int capacity = driver.PayloadCapacity(pipeline);
@@ -3445,7 +3445,7 @@ namespace ZG
         public int EndCommandReconnect(
             int registerMessageLength,
             int type,
-            NetworkConnection connection,
+            in NetworkConnection connection,
             DataStreamWriter writer)
         {
             if (!__EndCommand(writer, out int position, out uint id, out var pipeline))
@@ -3477,7 +3477,7 @@ namespace ZG
 
         public int EndCommandConnect(
             int type,
-            NetworkConnection connection,
+            in NetworkConnection connection,
             DataStreamWriter writer)
         {
             return EndCommandReconnect(writer.Length, type, connection, writer);

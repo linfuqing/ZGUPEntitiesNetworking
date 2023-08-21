@@ -7,7 +7,7 @@ using Unity.Mathematics;
 
 namespace ZG
 {
-    [BurstCompile, UpdateInGroup(typeof(PresentationSystemGroup))]
+    [BurstCompile, UpdateInGroup(typeof(InitializationSystemGroup))]
     public partial struct NetworkEntitySystem : ISystem
     {
         [BurstCompile]
@@ -118,17 +118,14 @@ namespace ZG
             private set;
         }
 
+        [BurstCompile]
         public void OnCreate(ref SystemState state)
         {
-            __group = state.GetEntityQuery(
-                new EntityQueryDesc()
-                {
-                    All = new ComponentType[]
-                    {
-                        ComponentType.ReadOnly<NetworkIdentity>()
-                    }, 
-                    Options = EntityQueryOptions.IncludeDisabledEntities
-                });
+            using (var builder = new EntityQueryBuilder(Allocator.Temp))
+                __group = builder
+                        .WithAll<NetworkIdentity>()
+                        .WithOptions(EntityQueryOptions.IncludeDisabledEntities)
+                        .Build(ref state);
 
             __entityType = state.GetEntityTypeHandle();
             __identityType = state.GetComponentTypeHandle<NetworkIdentity>(true);
@@ -136,6 +133,7 @@ namespace ZG
             entities = new SharedHashMap<uint, Entity>(Allocator.Persistent);
         }
 
+        //[BurstCompile]
         public void OnDestroy(ref SystemState state)
         {
             entities.Dispose();

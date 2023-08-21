@@ -9,6 +9,62 @@ using Unity.Collections.LowLevel.Unsafe;
 
 namespace ZG
 {
+    public struct NetworkServerMessage : System.IComparable<NetworkServerMessage>
+    {
+        public uint type;
+        public int index;
+        public NetworkConnection connection;
+        internal UnsafeBlock _block;
+
+        public DataStreamReader stream => _block.isCreated ? new DataStreamReader(_block.AsArray<byte>()) : default;
+
+        public int CompareTo(NetworkServerMessage other)
+        {
+            return index.CompareTo(other.index);
+        }
+    }
+
+    public struct NetworkServerMessageManager
+    {
+        private NativeParallelMultiHashMap<uint, NetworkServerMessage>.ReadOnly __buffers;
+
+        public NetworkServerMessageManager(in NativeParallelMultiHashMap<uint, NetworkServerMessage>.ReadOnly buffers)
+        {
+            __buffers = buffers;
+        }
+
+        public void GetIDs(ref NativeList<uint> ids)
+        {
+            uint id;
+            var enumerator = __buffers.GetEnumerator();
+            while (enumerator.MoveNext())
+            {
+                id = enumerator.Current.Key;
+                if (ids.IndexOf(id) == -1)
+                    ids.Add(id);
+            }
+        }
+
+        public bool Receive(uint id, ref NativeList<NetworkServerMessage> messages)
+        {
+            int index = messages.Length;
+            if (__buffers.TryGetFirstValue(id, out var message, out var iterator))
+            {
+                do
+                {
+                    messages.Add(message);
+                } while (__buffers.TryGetNextValue(out message, ref iterator));
+
+                messages.AsArray().GetSubArray(index, messages.Length - index).Sort();
+
+                return true;
+            }
+
+            return false;
+        }
+
+    }
+
     public struct NetworkServer
     {
         private struct Event
@@ -16,21 +72,6 @@ namespace ZG
             public NetworkMessageType messageType;
             public NetworkConnection connection;
             public uint id;
-        }
-
-        public struct Message : System.IComparable<Message>
-        {
-            public uint type;
-            public int index;
-            public NetworkConnection connection;
-            internal UnsafeBlock _block;
-
-            public DataStreamReader stream => _block.isCreated ? new DataStreamReader(_block.AsArray<byte>()) : default;
-
-            public int CompareTo(Message other)
-            {
-                return index.CompareTo(other.index);
-            }
         }
 
         [BurstCompile]
@@ -45,9 +86,9 @@ namespace ZG
 
             public NativeList<Event> events;
 
-            public NativeList<Message> messages;
+            public NativeList<NetworkServerMessage> messages;
 
-            public NativeParallelMultiHashMap<uint, Message> buffers;
+            public NativeParallelMultiHashMap<uint, NetworkServerMessage> buffers;
 
             public void Execute()
             {
@@ -97,9 +138,9 @@ namespace ZG
 
             public NativeList<Event>.ParallelWriter events;
 
-            public NativeList<Message>.ParallelWriter messages;
+            public NativeList<NetworkServerMessage>.ParallelWriter messages;
 
-            public NativeParallelMultiHashMap<uint, Message>.ParallelWriter buffers;
+            public NativeParallelMultiHashMap<uint, NetworkServerMessage>.ParallelWriter buffers;
 
             public unsafe void Execute(int index)
             {
@@ -111,7 +152,7 @@ namespace ZG
                     return;
                 }
 
-                Message message;
+                NetworkServerMessage message;
                 message.index = 0;
                 message.connection = connection;
 
@@ -205,7 +246,7 @@ namespace ZG
 
             private void __Disconnect(in NetworkConnection connection, DisconnectReason disconnectReason, int index)
             {
-                Message message;
+                NetworkServerMessage message;
                 message.index = index;
                 message.connection = connection;
 
@@ -245,7 +286,7 @@ namespace ZG
             [ReadOnly]
             public NativeArray<Event> events;
 
-            public NativeArray<Message> messages;
+            public NativeArray<NetworkServerMessage> messages;
 
             public NativeList<NetworkConnection> connections;
 
@@ -293,11 +334,11 @@ namespace ZG
 
         private NativeList<Event> __events;
 
-        private NativeList<Message> __messages;
+        private NativeList<NetworkServerMessage> __messages;
 
         private NativeHashMap<NetworkConnection, uint> __ids;
 
-        private NativeParallelMultiHashMap<uint, Message> __buffers;
+        private NativeParallelMultiHashMap<uint, NetworkServerMessage> __buffers;
 
         public bool isCreated => __buffer.isCreated;
 
@@ -310,7 +351,9 @@ namespace ZG
             get => __ids;
         }
 
-        public NativeArray<Message>.ReadOnly messagesReadOnly => __messages.AsArray().AsReadOnly();
+        public NativeArray<NetworkServerMessage>.ReadOnly messages => __messages.AsArray().AsReadOnly();
+
+        public NativeParallelMultiHashMap<uint, NetworkServerMessage>.ReadOnly buffers => __buffers.AsReadOnly();
 
         public NetworkDriver driver
         {
@@ -334,11 +377,11 @@ namespace ZG
 
             __events = new NativeList<Event>(allocator);
 
-            __messages = new NativeList<Message>(allocator);
+            __messages = new NativeList<NetworkServerMessage>(allocator);
 
             __ids = new NativeHashMap<NetworkConnection, uint>(1, allocator);
 
-            __buffers = new NativeParallelMultiHashMap<uint, Message>(1, allocator);
+            __buffers = new NativeParallelMultiHashMap<uint, NetworkServerMessage>(1, allocator);
 
             driver = NetworkDriver.Create(settings);
 
@@ -479,7 +522,7 @@ namespace ZG
             }
         }
 
-        public void Receive(uint id, ref NativeList<Message> messages)
+        public void Receive(uint id, ref NativeList<NetworkServerMessage> messages)
         {
             int index = messages.Length;
             var enumerator = __buffers.GetValuesForKey(id);
