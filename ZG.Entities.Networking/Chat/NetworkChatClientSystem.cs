@@ -169,12 +169,12 @@ namespace ZG
             private set => __connections[0] = value;
         }
 
-        public NetworkChatClient(Allocator allocator)
+        public NetworkChatClient(in AllocatorManager.AllocatorHandle allocator)
         {
             __driver = NetworkDriver.Create();
             __buffer = new NativeBuffer(allocator, 1);
-            __endPoints = new NativeArray<NetworkEndpoint>(1, allocator, NativeArrayOptions.ClearMemory);
-            __connections = new NativeArray<NetworkConnection>(1, allocator, NativeArrayOptions.ClearMemory);
+            __endPoints = CollectionHelper.CreateNativeArray<NetworkEndpoint>(1, allocator, NativeArrayOptions.ClearMemory);
+            __connections = CollectionHelper.CreateNativeArray<NetworkConnection>(1, allocator, NativeArrayOptions.ClearMemory);
             __identities = new NativeParallelHashMap<ulong, Identity>(1, allocator);
             __messages = new NativeParallelMultiHashMap<ulong, Message>(1, allocator);
         }
@@ -333,39 +333,83 @@ namespace ZG
         }
     }
 
-    [AutoCreateIn("Client")]
-    public partial class NetworkChatClientSystem : SystemBase
+    public struct NetworkChatClientManager : IComponentData
     {
-        public LookupJobManager lookupJobManager;
+        private UnsafeList<LookupJobManager> __lookupJobManager;
+
+        public bool isCreated => __lookupJobManager.IsCreated;
+
+        public ref LookupJobManager lookupJobManager => ref __lookupJobManager.ElementAt(0);
 
         public NetworkChatClient client
+        {
+            get;
+        }
+
+        public static EntityQuery GetEntityQuery(ref SystemState state)
+        {
+            using (var builder = new EntityQueryBuilder(Allocator.Temp))
+                return builder
+                    .WithAll<NetworkChatClientManager>()
+                    .WithOptions(EntityQueryOptions.IncludeSystems)
+                    .Build(ref state);
+        }
+
+        public NetworkChatClientManager(in AllocatorManager.AllocatorHandle allocator)
+        {
+            __lookupJobManager = new UnsafeList<LookupJobManager>(1, allocator, NativeArrayOptions.UninitializedMemory);
+            __lookupJobManager.Resize(1, NativeArrayOptions.ClearMemory);
+
+            client = new NetworkChatClient(allocator);
+        }
+
+        public void Dispose()
+        {
+            lookupJobManager.CompleteReadWriteDependency();
+
+            __lookupJobManager.Dispose();
+
+            client.Dispose();
+        }
+
+        public JobHandle Update(in JobHandle inputDeps)
+        {
+            var jobHandle = JobHandle.CombineDependencies(lookupJobManager.readWriteJobHandle, inputDeps);
+            jobHandle = client.ScheduleUpdate(jobHandle);
+
+            lookupJobManager.readWriteJobHandle = jobHandle;
+
+            return jobHandle;
+        }
+    }
+
+
+    [AutoCreateIn("Client"), BurstCompile]
+    public partial struct NetworkChatClientSystem : ISystem
+    {
+        public NetworkChatClientManager client
         {
             get;
 
             private set;
         }
 
-        protected override void OnCreate()
+        //[BurstCompile]
+        public void OnCreate(ref SystemState state)
         {
-            base.OnCreate();
-
-            client = new NetworkChatClient(Allocator.Persistent);
+            client = new NetworkChatClientManager(Allocator.Persistent);
         }
 
-        protected override void OnDestroy()
+        //[BurstCompile]
+        public void OnDestroy(ref SystemState state)
         {
             client.Dispose();
-
-            base.OnDestroy();
         }
 
-        protected override void OnUpdate()
+        [BurstCompile]
+        public void OnUpdate(ref SystemState state)
         {
-            var jobHandle = client.ScheduleUpdate(JobHandle.CombineDependencies(lookupJobManager.readWriteJobHandle, Dependency));
-
-            lookupJobManager.readWriteJobHandle = jobHandle;
-
-            Dependency = jobHandle;
+            state.Dependency = client.Update(state.Dependency);
         }
     }
 }

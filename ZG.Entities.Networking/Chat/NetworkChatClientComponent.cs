@@ -12,7 +12,7 @@ namespace ZG
 
         [SerializeField]
         internal string _worldName = "Client";
-        private NetworkChatClientSystem __system;
+        private NetworkChatClientManager __manager;
 
         private NativeList<ulong> __channels;
         private NativeList<NetworkChatClient.Message> __messages;
@@ -21,12 +21,12 @@ namespace ZG
         {
             get
             {
-                if (__system == null)
-                    __system = WorldUtility.GetWorld(_worldName).GetOrCreateSystemManaged<NetworkChatClientSystem>();
+                if (!__manager.isCreated)
+                    __manager = WorldUtility.GetWorld(_worldName).GetOrCreateSystemUnmanaged<NetworkChatClientSystem>().client;
 
-                __system.lookupJobManager.CompleteReadWriteDependency();
+                __manager.lookupJobManager.CompleteReadWriteDependency();
 
-                return __system.client;
+                return __manager.client;
             }
         }
 

@@ -7,24 +7,26 @@ namespace ZG
     {
         [SerializeField]
         internal string _worldName = "Server";
-        private NetworkChatServerSystem __system;
+        private NetworkChatServerManager __manager;
 
-        public bool isListening => system.isListening;
+        public bool isListening => server.isListening;
 
-        public NetworkChatServerSystem system
+        public NetworkChatServer server
         {
             get
             {
-                if (__system == null)
-                    __system = WorldUtility.GetWorld(_worldName).GetOrCreateSystemManaged<NetworkChatServerSystem>();
+                if (!__manager.isCreated)
+                    __manager = WorldUtility.GetWorld(_worldName).GetOrCreateSystemUnmanaged<NetworkChatServerSystem>().manager;
 
-                return __system;
+                __manager.lookupJobManager.CompleteReadWriteDependency();
+
+                return __manager.server;
             }
         }
 
         public void Listen(ushort port, NetworkFamily family = NetworkFamily.Ipv4)
         {
-            system.Listen(port, family);
+            server.Listen(port, family);
         }
     }
 }

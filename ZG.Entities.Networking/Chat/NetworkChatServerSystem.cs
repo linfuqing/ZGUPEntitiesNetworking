@@ -517,39 +517,84 @@ namespace ZG
         }
     }
 
-    [AutoCreateIn("Server")]
-    public partial class NetworkChatServerSystem : SystemBase
+    public struct NetworkChatServerManager : IComponentData
     {
-        public int innerloopBatchCount = 4;
+        private UnsafeList<LookupJobManager> __lookupJobManager;
 
-        private NetworkChatServer __server;
+        public bool isCreated => __lookupJobManager.IsCreated;
 
-        public bool isListening => __server.isListening;
+        public ref LookupJobManager lookupJobManager => ref __lookupJobManager.ElementAt(0);
 
-        public void Listen(ushort port, NetworkFamily family = NetworkFamily.Ipv4)
+        public NetworkChatServer server
         {
-            CompleteDependency();
-
-            __server.Listen(port, family);
+            get;
         }
 
-        protected override void OnCreate()
+        public static EntityQuery GetEntityQuery(ref SystemState state)
         {
-            base.OnCreate();
-
-            __server = new NetworkChatServer(Allocator.Persistent);
+            using (var builder = new EntityQueryBuilder(Allocator.Temp))
+                return builder
+                    .WithAll<NetworkChatServerManager>()
+                    .WithOptions(EntityQueryOptions.IncludeSystems)
+                    .Build(ref state);
         }
 
-        protected override void OnDestroy()
+        public NetworkChatServerManager(in AllocatorManager.AllocatorHandle allocator)
         {
-            __server.Dispose();
+            __lookupJobManager = new UnsafeList<LookupJobManager>(1, allocator, NativeArrayOptions.UninitializedMemory);
+            __lookupJobManager.Resize(1, NativeArrayOptions.ClearMemory);
 
-            base.OnDestroy();
+            server = new NetworkChatServer(allocator);
         }
 
-        protected override void OnUpdate()
+        public void Dispose()
         {
-            Dependency = __server.ScheduleUpdate(innerloopBatchCount, Dependency);
+            lookupJobManager.CompleteReadWriteDependency();
+
+            __lookupJobManager.Dispose();
+
+            server.Dispose();
+        }
+
+        public JobHandle Update(int innerloopBatchCount, in JobHandle inputDeps)
+        {
+            var jobHandle = JobHandle.CombineDependencies(lookupJobManager.readWriteJobHandle, inputDeps);
+            jobHandle = server.ScheduleUpdate(innerloopBatchCount, jobHandle);
+
+            lookupJobManager.readWriteJobHandle = jobHandle;
+
+            return jobHandle;
+        }
+    }
+
+    [AutoCreateIn("Server"), BurstCompile]
+    public partial struct NetworkChatServerSystem : ISystem
+    {
+        public static readonly int InnerloopBatchCount = 4;
+
+        public NetworkChatServerManager manager
+        {
+            get;
+
+            private set;
+        }
+
+        //[BurstCompile]
+        public void OnCreate(ref SystemState state)
+        {
+            manager = new NetworkChatServerManager(Allocator.Persistent);
+        }
+
+        //[BurstCompile]
+        public void OnDestroy(ref SystemState state)
+        {
+            manager.Dispose();
+        }
+        
+        [BurstCompile]
+        public void OnUpdate(ref SystemState state)
+        {
+            state.Dependency = manager.Update(InnerloopBatchCount, state.Dependency);
         }
     }
 }
