@@ -5,7 +5,6 @@ using Unity.Collections;
 using Unity.Entities;
 using Unity.Jobs;
 using Unity.Networking.Transport;
-using static UnityEngine.Rendering.VirtualTexturing.Debugging;
 
 namespace ZG
 {
