@@ -479,7 +479,7 @@ namespace ZG
             acceptConnections.buffer = __buffer;
             acceptConnections.connections = __connections;
             acceptConnections.talkingResults = __talkingResults;
-            jobHandle = acceptConnections.Schedule(jobHandle);
+            jobHandle = acceptConnections.ScheduleByRef(jobHandle);
 
             var connections = __connections.AsDeferredJobArray();
 
@@ -502,7 +502,7 @@ namespace ZG
             applyLeaveOrJoinResults.connectionIdentitis = __connectionIdentitis;
             applyLeaveOrJoinResults.channelConnections = __channelConnections;
 
-            jobHandle = applyLeaveOrJoinResults.Schedule(jobHandle);
+            jobHandle = applyLeaveOrJoinResults.ScheduleByRef(jobHandle);
 
             SendTalkingResults sendTalkingResults;
             sendTalkingResults.model = StreamCompressionModel.Default;
