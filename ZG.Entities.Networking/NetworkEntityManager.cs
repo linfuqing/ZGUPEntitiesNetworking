@@ -10,6 +10,7 @@ namespace ZG
     {
         private struct Identity
         {
+            public uint originID;
             public int count;
             public Entity entity;
         }
@@ -21,6 +22,19 @@ namespace ZG
             get;
 
             private set;
+        }
+
+        public uint GetOriginID(uint id)
+        {
+            return __identities[id].originID;
+        }
+
+        public bool Change(uint fromID, uint toID)
+        {
+            var identity = __identities[fromID];
+            identity.originID = fromID;
+
+            return __identities.TryAdd(toID, identity) && __identities.Remove(fromID);
         }
 
         public Entity Register(uint id)

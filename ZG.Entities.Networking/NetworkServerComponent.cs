@@ -160,6 +160,8 @@ namespace ZG
         private Dictionary<uint, NetworkServerHandler> __handlers;
         private Dictionary<uint, NetworkIdentityComponent> __identities;
 
+        private HashSet<uint> __freeIdentityIDs;
+
         private HashSet<uint> __exclusiveTransactionIdentityIDs;
 
         public event Action<NetworkConnection> onConnect;
@@ -273,9 +275,9 @@ namespace ZG
         {
             get
             {
-                var controller = __GetController();
+                //var controller = __GetController();
 
-                controller.lookupJobManager.CompleteReadWriteDependency();
+                //controller.lookupJobManager.CompleteReadWriteDependency();
 
                 return ref world.GetOrCreateSystemUnmanaged<NetworkEntityManager>();
             }
@@ -321,6 +323,18 @@ namespace ZG
             uint id,
             in NetworkConnection connection = default)
         {
+            if(__freeIdentityIDs != null)
+            {
+                var enumerator = __freeIdentityIDs.GetEnumerator();
+                if (enumerator.MoveNext())
+                {
+                    uint freeIdentityID = enumerator.Current;
+
+                    if(entityManager.Change(freeIdentityID, id))
+                        __freeIdentityIDs.Remove(freeIdentityID);
+                }
+            }
+
             uint value = NetworkIdentity.SetLocalPlayer(type, server.driver.GetConnectionState(connection) == NetworkConnection.State.Connected);
 
             var identity = prefab.Instantiate(
@@ -341,6 +355,11 @@ namespace ZG
 
         public void Destroy(uint id)
         {
+            if (__freeIdentityIDs == null)
+                __freeIdentityIDs = new HashSet<uint>();
+
+            __freeIdentityIDs.Add(id);
+
             Destroy(__identities[id].gameObject);
 
             __identities.Remove(id);
@@ -427,10 +446,25 @@ namespace ZG
 
         public void Shutdown()
         {
+            ref var entityManager = ref this.entityManager;
+            if(__freeIdentityIDs != null)
+            {
+                foreach (var freeIdentityID in __freeIdentityIDs)
+                    entityManager.Unregister(freeIdentityID);
+
+                __freeIdentityIDs.Clear();
+            }
+
             if (__identities != null)
             {
-                foreach(var identity in __identities.Values)
-                    identity._host = null;
+                foreach (var identity in __identities)
+                {
+                    entityManager.Unregister(identity.Key);
+
+                    Destroy(identity.Value.gameObject);
+                }
+
+                __identities.Clear();
             }
 
             server.DisconnectAllConnections();
@@ -665,7 +699,8 @@ namespace ZG
                 var commander = this.commander;
                 if (__Unregister(id, connection, reader))
                 {
-                    identity._host = null;
+                    if(identity != null)
+                        identity._host = null;
 
                     if (commander.BeginCommand(id, __pipelines[channel], server.driver, out var writer))
                     {
