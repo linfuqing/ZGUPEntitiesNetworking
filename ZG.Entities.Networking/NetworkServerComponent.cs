@@ -326,7 +326,7 @@ namespace ZG
             if (__freeIdentityIDs != null && __freeIdentityIDs.TryGetValue(type, out var freeIdentityIDs))
             {
                 ref var manager = ref this.entityManager;
-                var entityManager = world.EntityManager;
+                //var entityManager = world.EntityManager;
                 HashSet<uint>.Enumerator enumerator;
                 uint freeIdentityID;
                 bool isContinue;
@@ -340,7 +340,17 @@ namespace ZG
                         freeIdentityID = enumerator.Current;
 
                         Entity entity = manager.GetEntity(freeIdentityID);
-                        if (entity != Entity.Null && entityManager.HasComponent<NetworkIdentity>(entity))
+                        if (entity == Entity.Null/* && entityManager.HasComponent<NetworkIdentity>(entity)*/)
+                        {
+                            manager.Unregister(freeIdentityID, false);
+
+                            freeIdentityIDs.Remove(freeIdentityID);
+
+                            isContinue = true;
+
+                            break;
+                        }
+                        else
                         {
                             if (manager.Change(freeIdentityID, id))
                             {
@@ -348,16 +358,6 @@ namespace ZG
 
                                 break;
                             }
-                        }
-                        else
-                        {
-                            manager.Unregister(freeIdentityID);
-
-                            freeIdentityIDs.Remove(freeIdentityID);
-
-                            isContinue = true;
-
-                            break;
                         }
                     }
                 } while (isContinue);

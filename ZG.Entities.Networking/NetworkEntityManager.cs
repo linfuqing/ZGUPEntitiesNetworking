@@ -58,14 +58,15 @@ namespace ZG
             return identity.entity;
         }
 
-        public bool Unregister(uint id)
+        public bool Unregister(uint id, bool isDestroy = true)
         {
             if (!__identities.TryGetValue(id, out var identity))
                 return false;
 
             if (--identity.count < 1)
             {
-                factory.DestroyEntity(identity.entity);
+                if(isDestroy)
+                    factory.DestroyEntity(identity.entity);
 
                 __identities.Remove(id);
             }
