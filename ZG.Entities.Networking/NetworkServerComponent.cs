@@ -79,9 +79,9 @@ namespace ZG
 
         void Configure(NativeArray<NetworkPipelineType> pipelineTypes);
 
-        void Listen(ushort port, NetworkFamily family = NetworkFamily.Ipv4);
+        bool Listen(ushort port, NetworkFamily family = NetworkFamily.Ipv4);
 
-        void Shutdown();
+        //void Shutdown();
 
         bool IsExclusiveTransaction(uint id);
 
@@ -437,11 +437,15 @@ namespace ZG
                 __pipelines[i] = driver.CreatePipeline(pipelineTypes[i]);
         }
 
-        public void Listen(ushort port, NetworkFamily family = NetworkFamily.Ipv4)
+        public bool Listen(ushort port, NetworkFamily family = NetworkFamily.Ipv4)
         {
-            Shutdown();
+            //Shutdown();
+            if (server.isListening)
+                return false;
 
             server.Listen(port, family);
+
+            return true;
         }
 
         public void Shutdown()

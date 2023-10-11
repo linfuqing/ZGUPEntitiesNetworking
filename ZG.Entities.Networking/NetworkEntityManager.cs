@@ -26,7 +26,7 @@ namespace ZG
 
         public uint GetOriginID(uint id)
         {
-            return __identities[id].originID;
+            return __identities.TryGetValue(id, out var identity) ? identity.originID : 0;
         }
 
         public bool Change(uint fromID, uint toID)
