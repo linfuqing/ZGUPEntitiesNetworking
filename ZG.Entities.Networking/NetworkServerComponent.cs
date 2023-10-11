@@ -325,13 +325,26 @@ namespace ZG
         {
             if(__freeIdentityIDs != null)
             {
+                ref var manager = ref this.entityManager;
+                var entityManager = world.EntityManager;
+
                 var enumerator = __freeIdentityIDs.GetEnumerator();
-                if (enumerator.MoveNext())
+                while (enumerator.MoveNext())
                 {
                     uint freeIdentityID = enumerator.Current;
 
-                    if(entityManager.Change(freeIdentityID, id))
-                        __freeIdentityIDs.Remove(freeIdentityID);
+                    Entity entity = manager.GetEntity(freeIdentityID);
+                    if (entity != Entity.Null && entityManager.HasComponent<NetworkIdentity>(entity))
+                    {
+                        if (manager.Change(freeIdentityID, id))
+                        {
+                            __freeIdentityIDs.Remove(freeIdentityID);
+
+                            break;
+                        }
+                    }
+                    else
+                        manager.Unregister(freeIdentityID);
                 }
             }
 

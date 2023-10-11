@@ -24,6 +24,11 @@ namespace ZG
             private set;
         }
 
+        public Entity GetEntity(uint id)
+        {
+            return __identities.TryGetValue(id, out var identity) ? factory.GetEntity(identity.entity) : Entity.Null;
+        }
+
         public uint GetOriginID(uint id)
         {
             return __identities.TryGetValue(id, out var identity) ? identity.originID : 0;
