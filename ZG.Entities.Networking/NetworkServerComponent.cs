@@ -160,7 +160,7 @@ namespace ZG
         private Dictionary<uint, NetworkServerHandler> __handlers;
         private Dictionary<uint, NetworkIdentityComponent> __identities;
 
-        private HashSet<uint> __freeIdentityIDs;
+        private Dictionary<int, HashSet<uint>> __freeIdentityIDs;
 
         private HashSet<uint> __exclusiveTransactionIdentityIDs;
 
@@ -323,29 +323,44 @@ namespace ZG
             uint id,
             in NetworkConnection connection = default)
         {
-            if(__freeIdentityIDs != null)
+            if (__freeIdentityIDs != null && __freeIdentityIDs.TryGetValue(type, out var freeIdentityIDs))
             {
                 ref var manager = ref this.entityManager;
                 var entityManager = world.EntityManager;
-
-                var enumerator = __freeIdentityIDs.GetEnumerator();
-                while (enumerator.MoveNext())
+                HashSet<uint>.Enumerator enumerator;
+                uint freeIdentityID;
+                bool isContinue;
+                do
                 {
-                    uint freeIdentityID = enumerator.Current;
+                    isContinue = false;
 
-                    Entity entity = manager.GetEntity(freeIdentityID);
-                    if (entity != Entity.Null && entityManager.HasComponent<NetworkIdentity>(entity))
+                    enumerator = freeIdentityIDs.GetEnumerator();
+                    while (enumerator.MoveNext())
                     {
-                        if (manager.Change(freeIdentityID, id))
+                        freeIdentityID = enumerator.Current;
+
+                        Entity entity = manager.GetEntity(freeIdentityID);
+                        if (entity != Entity.Null && entityManager.HasComponent<NetworkIdentity>(entity))
                         {
-                            __freeIdentityIDs.Remove(freeIdentityID);
+                            if (manager.Change(freeIdentityID, id))
+                            {
+                                freeIdentityIDs.Remove(freeIdentityID);
+
+                                break;
+                            }
+                        }
+                        else
+                        {
+                            manager.Unregister(freeIdentityID);
+
+                            freeIdentityIDs.Remove(freeIdentityID);
+
+                            isContinue = true;
 
                             break;
                         }
                     }
-                    else
-                        manager.Unregister(freeIdentityID);
-                }
+                } while (isContinue);
             }
 
             uint value = NetworkIdentity.SetLocalPlayer(type, server.driver.GetConnectionState(connection) == NetworkConnection.State.Connected);
@@ -368,12 +383,23 @@ namespace ZG
 
         public void Destroy(uint id)
         {
+            var identity = __identities[id];
+
+            int type = identity.type;
+
             if (__freeIdentityIDs == null)
-                __freeIdentityIDs = new HashSet<uint>();
+                __freeIdentityIDs = new Dictionary<int, HashSet<uint>>();
 
-            __freeIdentityIDs.Add(id);
+            if(!__freeIdentityIDs.TryGetValue(type, out var freeIdentityIDs))
+            {
+                freeIdentityIDs = new HashSet<uint>();
 
-            Destroy(__identities[id].gameObject);
+                __freeIdentityIDs[type] = freeIdentityIDs;
+            }
+
+            freeIdentityIDs.Add(id);
+
+            Destroy(identity.gameObject);
 
             __identities.Remove(id);
         }
@@ -466,10 +492,15 @@ namespace ZG
             ref var entityManager = ref this.entityManager;
             if(__freeIdentityIDs != null)
             {
-                foreach (var freeIdentityID in __freeIdentityIDs)
-                    entityManager.Unregister(freeIdentityID);
+                foreach (var freeIdentityIDs in __freeIdentityIDs.Values)
+                {
+                    foreach(var freeIdentityID in freeIdentityIDs)
+                        entityManager.Unregister(freeIdentityID);
 
-                __freeIdentityIDs.Clear();
+                    freeIdentityIDs.Clear();
+                }
+
+                //__freeIdentityIDs.Clear();
             }
 
             if (__identities != null)
