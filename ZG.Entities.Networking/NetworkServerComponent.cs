@@ -339,8 +339,16 @@ namespace ZG
                     {
                         freeIdentityID = enumerator.Current;
 
-                        Entity entity = manager.GetEntity(freeIdentityID);
-                        if (entity == Entity.Null/* && entityManager.HasComponent<NetworkIdentity>(entity)*/)
+                        if (manager.Exists(freeIdentityID))
+                        {
+                            if (manager.Change(freeIdentityID, id))
+                            {
+                                freeIdentityIDs.Remove(freeIdentityID);
+
+                                break;
+                            }
+                        }
+                        else
                         {
                             manager.Unregister(freeIdentityID, false);
 
@@ -349,15 +357,6 @@ namespace ZG
                             isContinue = true;
 
                             break;
-                        }
-                        else
-                        {
-                            if (manager.Change(freeIdentityID, id))
-                            {
-                                freeIdentityIDs.Remove(freeIdentityID);
-
-                                break;
-                            }
                         }
                     }
                 } while (isContinue);
