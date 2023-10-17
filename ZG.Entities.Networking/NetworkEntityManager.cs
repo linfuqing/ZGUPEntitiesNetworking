@@ -6,7 +6,7 @@ using Unity.Collections.LowLevel.Unsafe;
 namespace ZG
 {
     [DisableAutoCreation, BurstCompile]
-    public struct NetworkEntityManager : ISystem
+    public partial struct NetworkEntityManager : ISystem
     {
         private struct Identity
         {
