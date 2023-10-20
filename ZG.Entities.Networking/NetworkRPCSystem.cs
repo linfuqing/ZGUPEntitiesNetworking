@@ -1273,6 +1273,8 @@ namespace ZG
                 writer.WritePackedUInt(version.value, model);
 
 #if DEBUG
+                //Debug.Log($"Register {sourceID} To {destinationID}");
+
                 UnityEngine.Assertions.Assert.IsFalse(version.isActive);
 
                 version.isActive = true;
@@ -1309,6 +1311,8 @@ namespace ZG
             public void Send(ref DataStreamWriter writer, uint sourceID, uint destinationID)
             {
 #if DEBUG
+                //Debug.Log($"Unregister {sourceID} To {destinationID}");
+
                 Version version;
                 version.id = sourceID;
 
@@ -2925,6 +2929,8 @@ namespace ZG
                                         return;
                                     }
                                 }
+
+                                //Debug.Log($"Init {initCommand.id} To {id}");
 
                                 message.Send(ref writer, initCommand.id, id);
 

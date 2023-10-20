@@ -8,25 +8,9 @@ using NetworkWriter = Unity.Collections.DataStreamWriter;
 
 namespace ZG
 {
-    public struct NetworkIdentity : IComponentData
+    public struct NetworkIdentityType : IComponentData
     {
-        public uint id;
-        public uint value;
-
-        public bool isLocalPlayer
-        {
-            get => IsLocalPlayer(value);
-
-            set => this.value = SetLocalPlayer(type, value);
-        }
-
-        public int type => GetType(value);
-
-        public static uint SetLocalPlayer(int type, bool value) => (uint)(type << 1) | (value ? 1u : 0u);
-
-        public static bool IsLocalPlayer(uint value) => (value & 1u) == 1u;
-
-        public static int GetType(uint value) => (int)(value >> 1);
+        public int value;
     }
 
     [Serializable]
@@ -75,6 +59,7 @@ namespace ZG
     }
 
     [EntityComponent(typeof(NetworkIdentity))]
+    [EntityComponent(typeof(NetworkIdentityType))]
     public class NetworkIdentityComponent : EntityProxyComponent
     {
         internal INetworkHost _host;
@@ -86,37 +71,24 @@ namespace ZG
 
         public bool isLocalPlayer
         {
-            get
-            {
-                return identity.isLocalPlayer;
-            }
+            get;
 
-            internal set
-            {
-                var identity = this.identity;
-                identity.isLocalPlayer = value;
-
-                this.SetComponentData(identity);
-            }
-        }
-
-        public int type
-        {
-            get
-            {
-                return identity.type;
-            }
+            internal set;
         }
 
         public uint id
         {
-            get
-            {
-                return identity.id;
-            }
+            get;
+
+            private set;
         }
 
-        public NetworkIdentity identity => this.GetComponentData<NetworkIdentity>();
+        public int type
+        {
+            get => this.GetComponentData<NetworkIdentityType>().value;
+        }
+
+        public ref NetworkEntityManager networkEntityManager => ref world.GetOrCreateSystemUnmanaged<NetworkEntityManager>();
 
         public INetworkHost host
         {
@@ -155,18 +127,30 @@ namespace ZG
         public NetworkIdentityComponent Instantiate(
             in Quaternion rotation,
             in Vector3 position,
+            int type,
             uint id, 
-            uint value)
+            bool isLocalPlayer)
         {
-            ref var manager = ref world.GetOrCreateSystemUnmanaged<NetworkEntityManager>();
+            ref var networkEntityManager = ref this.networkEntityManager;
 
-            Entity prefab = manager.Register(id);
-            NetworkIdentity identity;
-            identity.id = id;
-            identity.value = value;
-            manager.factory.SetComponentData(prefab, identity);
+            bool isExists = networkEntityManager.Exists(id);
 
-            return GameObjectEntity.Instantiate(this, null, position, rotation, prefab);
+            Entity prefab = networkEntityManager.Register(id);
+
+            if (!isExists)
+            {
+                NetworkIdentityType networkIdentityType;
+                networkIdentityType.value = type;
+
+                networkEntityManager.factory.SetComponentData(prefab, networkIdentityType);
+            }
+
+            var instance = GameObjectEntity.Instantiate(this, null, position, rotation, prefab);
+
+            instance.isLocalPlayer = isLocalPlayer;
+            instance.id = id;
+
+            return instance;
         }
 
         public bool InvokeHandler(uint handle, in NetworkConnection connection, NetworkReader reader)
@@ -239,6 +223,18 @@ namespace ZG
         public int EndRPC(NetworkWriter writer)
         {
             return _host.EndRPC(writer);
+        }
+
+        public bool _Retain(uint id)
+        {
+            ref var networkEntityManager = ref this.networkEntityManager;
+
+            if (!networkEntityManager.Retain(this.id, id))
+                return false;
+
+            this.id = id;
+
+            return true;
         }
     }
 }

@@ -77,7 +77,7 @@ namespace ZG
 
         int EndSend(NetworkWriter writer);
 
-        void Configure(NativeArray<NetworkPipelineType> pipelineTypes);
+        void Configure(in NativeArray<NetworkPipelineType> pipelineTypes);
 
         bool Listen(ushort port, NetworkFamily family = NetworkFamily.Ipv4);
 
@@ -341,8 +341,12 @@ namespace ZG
 
                         if (manager.Exists(freeIdentityID))
                         {
-                            if (manager.Change(freeIdentityID, id))
+                            Debug.LogError($"Change {freeIdentityID} To {id}");
+
+                            if (manager.Retain(freeIdentityID, id))
                             {
+                                enumerator.Dispose();
+
                                 freeIdentityIDs.Remove(freeIdentityID);
 
                                 break;
@@ -350,7 +354,9 @@ namespace ZG
                         }
                         else
                         {
-                            manager.Unregister(freeIdentityID, false);
+                            manager.Release(freeIdentityID, false);
+
+                            enumerator.Dispose();
 
                             freeIdentityIDs.Remove(freeIdentityID);
 
@@ -362,13 +368,12 @@ namespace ZG
                 } while (isContinue);
             }
 
-            uint value = NetworkIdentity.SetLocalPlayer(type, server.driver.GetConnectionState(connection) == NetworkConnection.State.Connected);
-
             var identity = prefab.Instantiate(
                 rotation,
                 position,
+                type, 
                 id,
-                value);
+                server.driver.GetConnectionState(connection) == NetworkConnection.State.Connected);
 
             identity._host = null;
 
@@ -382,6 +387,8 @@ namespace ZG
 
         public void Destroy(uint id)
         {
+            entityManager.Unregister(id);
+
             var identity = __identities[id];
 
             int type = identity.type;
@@ -466,7 +473,7 @@ namespace ZG
             isExclusivingTransaction = false;
         }
 
-        public void Configure(NativeArray<NetworkPipelineType> pipelineTypes)
+        public void Configure(in NativeArray<NetworkPipelineType> pipelineTypes)
         {
             var driver = server.driver;
             int numPipelineTypes = pipelineTypes.Length;

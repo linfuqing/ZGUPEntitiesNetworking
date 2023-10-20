@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Unity.Collections;
+using Unity.Entities;
 using Unity.Networking.Transport;
 using Unity.Networking.Transport.Error;
 using UnityEngine;
@@ -22,9 +23,9 @@ namespace ZG
 
         NetworkIdentityComponent GetIdentity(uint id);
 
-        void Destroy(NetworkIdentityComponent identity, NetworkReader reader);
+        void Destroy(bool isLocalPlayer, uint id, int type, NetworkReader reader, NetworkIdentityComponent identity);
 
-        bool Create(bool isLocalPlayer, int type, uint id, NetworkReader reader, ref INetworkClientCreateRequest request);
+        bool Create(bool isLocalPlayer, uint id, int type, NetworkReader reader, ref INetworkClientCreateRequest request);
     }
 
     public interface INetworkClient
@@ -41,6 +42,8 @@ namespace ZG
         NetworkConnection.State connectionState { get; }
 
         int identityCount { get; }
+
+        ref NetworkEntityManager entityManager { get; }
 
         NetworkIdentityComponent GetIdentity(uint id);
 
@@ -101,7 +104,7 @@ namespace ZG
 
         private struct BufferToInit
         {
-            public uint value;
+            public uint identity;
             public NetworkIdentityComponent instance;
         }
 
@@ -116,6 +119,7 @@ namespace ZG
         private bool __isInitAndCreateSync;
         private bool __isBusy;
         private INetworkClientWrapper __wrapper;
+        private World __world;
         private NetworkClientManager __manager;
         private NativeArray<NetworkPipeline> __pipelines;
         private NativeList<uint> __ids;
@@ -156,16 +160,35 @@ namespace ZG
 
         //public int rtt => 0;//client.GetRTT();
 
+        public World world
+        {
+            get
+            {
+                if(__world == null)
+                    __world = WorldUtility.GetWorld(_worldName);
+
+                return __world;
+            }
+        }
+
+        public ref NetworkEntityManager entityManager
+        {
+            get
+            {
+                //var controller = __GetController();
+
+                //controller.lookupJobManager.CompleteReadWriteDependency();
+
+                return ref world.GetOrCreateSystemUnmanaged<NetworkEntityManager>();
+            }
+        }
+
         public NetworkClient client
         {
             get
             {
                 if(!__manager.isCreated)
-                {
-                    var world = WorldUtility.GetWorld(_worldName);
-
                     __manager = world.GetExistingSystemUnmanaged<NetworkClientSystem>().manager;
-                }
 
                 __manager.lookupJobManager.CompleteReadWriteDependency();
 
@@ -214,10 +237,17 @@ namespace ZG
 
                     bufferToInit.instance._host = this;
 
-                    NetworkIdentity identity;
+                    bufferToInit.instance.isLocalPlayer = NetworkIdentity.IsLocalPlayer(bufferToInit.identity);
+
+                    /*NetworkIdentity identity;
                     identity.id = id;
-                    identity.value = bufferToInit.value;
-                    bufferToInit.instance.SetComponentData(identity);
+                    identity.value = bufferToInit.identity;
+                    bufferToInit.instance.identity = identity;*/
+
+                    Debug.Log($"Init Identity {id} : {bufferToInit.instance.name} : {bufferToInit.instance.entity}");
+
+                    if (__identities == null)
+                         __identities = new Dictionary<uint, NetworkIdentityComponent>();
 
                     __identities.Add(id, bufferToInit.instance);
 
@@ -263,8 +293,8 @@ namespace ZG
                         __buffersToCreate.Remove(id);
                         //__indicesToCreate.Remove(pair.Key);
 
-                        if (__identities == null)
-                            __identities = new Dictionary<uint, NetworkIdentityComponent>();
+                        //if (__identities == null)
+                       //     __identities = new Dictionary<uint, NetworkIdentityComponent>();
 
                         var instance = bufferToCreate.request.instance;
                         if (instance == null)
@@ -272,7 +302,7 @@ namespace ZG
                         else
                         {
                             BufferToInit bufferToInit;
-                            bufferToInit.value = bufferToCreate.identity;
+                            bufferToInit.identity = bufferToCreate.identity;
                             bufferToInit.instance = instance;
 
                             if (__buffersToInit == null)
@@ -519,12 +549,12 @@ namespace ZG
             return __wrapper.GetIdentity(id);
         }
 
-        private void __Destroy(NetworkIdentityComponent identity, NetworkReader reader)
+        private void __Destroy(bool isLocalPlayer, uint id, int type, NetworkReader reader, NetworkIdentityComponent identity)
         {
             if(__wrapper == null)
                 Destroy(identity.gameObject);
             else
-                __wrapper.Destroy(identity, reader);
+                __wrapper.Destroy(isLocalPlayer, id, type, reader, identity);
         }
 
         private bool __Create(bool isLocalPlayer, int type, uint id, NetworkReader reader, ref INetworkClientCreateRequest request)
@@ -547,7 +577,7 @@ namespace ZG
                 return true;*/
             }
 
-            return __wrapper.Create(isLocalPlayer, type, id, reader, ref request);
+            return __wrapper.Create(isLocalPlayer, id, type, reader, ref request);
         }
 
         private bool __Create(uint id, uint identity, NetworkReader reader)
@@ -631,7 +661,12 @@ namespace ZG
 
                                     __identities.Remove(id);
 
-                                    __Destroy(instance, reader);
+                                    __Destroy(
+                                        instance.isLocalPlayer,
+                                        id,
+                                        instance.type,
+                                        reader, 
+                                        instance);
                                 }
                                 else
                                     Debug.LogError($"Unregister Error: {id}");
@@ -663,7 +698,12 @@ namespace ZG
                             instance._onDestroy();
                     }
 
-                    __Destroy(instance, default);
+                    __Destroy(
+                        instance.isLocalPlayer,
+                        pair.Key,
+                        instance.type,
+                        default, 
+                        instance);
                 }
 
                 __identities.Clear();
@@ -671,16 +711,34 @@ namespace ZG
 
             if (__buffersToInit != null)
             {
-                foreach (var bufferToInit in __buffersToInit)
-                    __Destroy(bufferToInit.Value.instance, default);
+                BufferToInit bufferToInit;
+                foreach (var pair in __buffersToInit)
+                {
+                    bufferToInit = pair.Value;
+                    __Destroy(
+                        NetworkIdentity.IsLocalPlayer(bufferToInit.identity),
+                        pair.Key,
+                        NetworkIdentity.GetType(bufferToInit.identity),
+                        default,
+                        bufferToInit.instance);
+                }
 
                 __buffersToInit.Clear();
             }
 
             if (__buffersToCreate != null)
             {
-                foreach (var bufferToCreate in __buffersToCreate)
-                    __Destroy(bufferToCreate.Value.request.instance, default);
+                BufferToCreate bufferToCreate;
+                foreach (var pair in __buffersToCreate)
+                {
+                    bufferToCreate = pair.Value;
+                    __Destroy(
+                        NetworkIdentity.IsLocalPlayer(bufferToCreate.identity),
+                        pair.Key,
+                        NetworkIdentity.GetType(bufferToCreate.identity),
+                        default, 
+                        bufferToCreate.request.instance);
+                }
 
                 __buffersToCreate.Clear();
             }

@@ -5,6 +5,26 @@ using Unity.Collections.LowLevel.Unsafe;
 
 namespace ZG
 {
+    public struct NetworkIdentity : IComponentData
+    {
+        public uint id;
+
+        /*public bool isLocalPlayer
+        {
+            get => IsLocalPlayer(value);
+
+            set => this.value = SetLocalPlayer(type, value);
+        }
+
+        public int type => GetType(value);*/
+
+        public static uint SetLocalPlayer(int type, bool value) => (uint)(type << 1) | (value ? 1u : 0u);
+
+        public static bool IsLocalPlayer(uint value) => (value & 1u) == 1u;
+
+        public static int GetType(uint value) => (int)(value >> 1);
+    }
+
     [DisableAutoCreation, BurstCompile]
     public partial struct NetworkEntityManager : ISystem
     {
@@ -34,12 +54,31 @@ namespace ZG
             return __identities.TryGetValue(id, out var identity) ? identity.originID : 0;
         }
 
-        public bool Change(uint fromID, uint toID)
+        public bool Retain(uint fromID, uint toID)
         {
             var identity = __identities[fromID];
+            if (identity.count != 0 || identity.originID != 0)
+                return false;
+
+            NetworkIdentity instance;
+            instance.id = toID;
+            factory.SetComponentData(identity.entity, instance);
+
             identity.originID = fromID;
 
             return __identities.TryAdd(toID, identity) && __identities.Remove(fromID);
+        }
+
+        public bool Release(uint id, bool isDestroy)
+        {
+            var identity = __identities[id];
+            if (identity.count != 0 || !__identities.Remove(id))
+                return false;
+
+            if(isDestroy)
+                factory.DestroyEntity(identity.entity);
+
+            return true;
         }
 
         public Entity Register(uint id)
@@ -48,7 +87,13 @@ namespace ZG
                 ++identity.count;
             else
             {
+                var factory = this.factory;
+
                 identity.entity = factory.CreateEntity();
+
+                NetworkIdentity instance;
+                instance.id = id;
+                factory.SetComponentData(identity.entity, instance);
 
                 identity.count = 1;
             }
@@ -58,20 +103,18 @@ namespace ZG
             return identity.entity;
         }
 
-        public bool Unregister(uint id, bool isDestroy = true)
+        public bool Unregister(uint id)
         {
             if (!__identities.TryGetValue(id, out var identity))
                 return false;
 
-            if (--identity.count < 1)
-            {
-                if(isDestroy)
-                    factory.DestroyEntity(identity.entity);
+            if (--identity.count < 0)
+                return false;
 
-                __identities.Remove(id);
-            }
-            else
-                __identities[id] = identity;
+            if (identity.count == 0)
+                identity.originID = 0;
+
+            __identities[id] = identity;
 
             return true;
         }
