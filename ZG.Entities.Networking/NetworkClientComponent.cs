@@ -244,7 +244,7 @@ namespace ZG
                     identity.value = bufferToInit.identity;
                     bufferToInit.instance.identity = identity;*/
 
-                    Debug.Log($"Init Identity {id} : {bufferToInit.instance.name} : {bufferToInit.instance.entity}");
+                    //Debug.Log($"Init Identity {id} : {bufferToInit.instance.name} : {bufferToInit.instance.entity}");
 
                     if (__identities == null)
                          __identities = new Dictionary<uint, NetworkIdentityComponent>();

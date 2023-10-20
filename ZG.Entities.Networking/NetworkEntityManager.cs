@@ -56,7 +56,15 @@ namespace ZG
 
         public bool Retain(uint fromID, uint toID)
         {
-            var identity = __identities[fromID];
+            if(__identities.TryGetValue(toID, out var identity))
+            {
+                if (identity.originID == fromID)
+                    return true;
+
+                return false;
+            }
+
+            identity = __identities[fromID];
             if (identity.count != 0 || identity.originID != 0)
                 return false;
 
