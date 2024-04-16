@@ -327,7 +327,7 @@ namespace ZG
         private NativeBuffer __buffer;
 
         private NativeArray<int> __idCount;
-
+        
         private NativeList<NetworkConnection> __connectionsToDisconnects;
 
         private NativeList<NetworkConnection> __connections;

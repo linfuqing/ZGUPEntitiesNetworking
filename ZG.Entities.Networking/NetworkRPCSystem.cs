@@ -175,17 +175,17 @@ namespace ZG
         private NativeParallelHashMap<uint, Identity> __identities;
 
         /// <summary>
-        /// id¶ÔÓ¦¿É¿´µ½µÄÇøÓò
+        /// idï¿½ï¿½Ó¦ï¿½É¿ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         /// </summary>
         private NativeParallelMultiHashMap<uint, T> __idNodes;
 
         /// <summary>
-        /// ¿É¿´µ½¸ÃÇøÓòµÄid
+        /// ï¿½É¿ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½id
         /// </summary>
         private NativeParallelMultiHashMap<T, uint> __nodeIDs;
 
         /// <summary>
-        /// ¸ÃÇøÓò´æÔÚµÄIdentity
+        /// ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Úµï¿½Identity
         /// </summary>
         private NativeParallelMultiHashMap<T, NodeIdentity> __nodeIdentities;
 
@@ -267,7 +267,7 @@ namespace ZG
         }
 
         /// <summary>
-        /// id¶ÔÓ¦¿É¿´µ½µÄÇøÓò
+        /// idï¿½ï¿½Ó¦ï¿½É¿ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         /// </summary>
         public NativeParallelMultiHashMap<uint, T>.Enumerator GetIDNodes(uint id)
         {
@@ -275,7 +275,7 @@ namespace ZG
         }
 
         /// <summary>
-        /// ¿É¿´µ½¸ÃÇøÓòµÄid
+        /// ï¿½É¿ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½id
         /// </summary>
         public NativeParallelMultiHashMap<T, uint>.Enumerator GetNodeIDs(in T value)
         {
@@ -283,7 +283,7 @@ namespace ZG
         }
 
         /// <summary>
-        /// ¸ÃÇøÓò´æÔÚµÄIdentity
+        /// ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Úµï¿½Identity
         /// </summary>
         public NativeParallelMultiHashMap<T, NodeIdentity>.Enumerator GetNodeIdentities(in T value)
         {
@@ -496,7 +496,7 @@ namespace ZG
 
                 if (isSend)
                 {
-                    //×Ô¼ºÄÜ¿´µ½µÄÇøÓò
+                    //ï¿½Ô¼ï¿½ï¿½Ü¿ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
                     if (__nodeIdentities.TryGetFirstValue(targetNode, out nodeIdentity, out iterator))
                     {
                         do
@@ -1810,7 +1810,7 @@ namespace ZG
 
                             idsToInit.Remove(id);
 
-                            //ÕâÀï²»Ó¦¸ÃÅÐ¶ÏÁ¬½Ó£¬ÒòÎª¿ÉÄÜ´ËÊ±ÒÑ¾­¶Ï¿ªÁË
+                            //ï¿½ï¿½ï¿½ï²»Ó¦ï¿½ï¿½ï¿½Ð¶ï¿½ï¿½ï¿½ï¿½Ó£ï¿½ï¿½ï¿½Îªï¿½ï¿½ï¿½Ü´ï¿½Ê±ï¿½Ñ¾ï¿½ï¿½Ï¿ï¿½ï¿½ï¿½
                             //if (NetworkConnection.State.Connected == driver.GetConnectionState(manager.GetConnection(id)))
                             {
                                 layerMask = manager.GetLayerMask(id);
@@ -3071,6 +3071,7 @@ namespace ZG
             public void Execute()
             {
                 buffer.Reset();
+                buffer.length = 0;
 
                 InitCommand initCommand;
                 InitEvent initEvent;
@@ -3243,7 +3244,7 @@ namespace ZG
             __removeIDs.Dispose();
         }
 
-        public unsafe bool BeginCommand(
+        public bool BeginCommand(
             uint id, 
             in NetworkPipeline pipeline, 
             in NetworkDriver driver, 

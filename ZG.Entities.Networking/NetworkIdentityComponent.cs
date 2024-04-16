@@ -1,4 +1,5 @@
 using System;
+using System.Reflection;
 using System.Collections.Generic;
 using Unity.Entities;
 using Unity.Networking.Transport;
@@ -17,12 +18,6 @@ namespace ZG
     public struct NetworkChannel
     {
         public NetworkPipelineType type;
-    }
-
-    [Serializable]
-    public class NetworkHostTopology
-    {
-        public NetworkChannel[] channels;
     }
 
     public interface INetworkMessage
@@ -56,6 +51,12 @@ namespace ZG
 
             return value;
         }
+    }
+
+    [Serializable]
+    public class NetworkHostTopology
+    {
+        public NetworkChannel[] channels;
     }
 
     [EntityComponent(typeof(NetworkIdentity))]

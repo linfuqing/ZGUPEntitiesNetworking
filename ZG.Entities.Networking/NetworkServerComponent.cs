@@ -153,7 +153,8 @@ namespace ZG
         private NetworkRPCController __controller;
         private INetworkServerWrapper __wrapper;
 
-        private NativeArray<NetworkPipeline> __pipelines;
+        private SystemHandle __entitySystem;
+        //private NativeArray<NetworkPipeline> __pipelines;
         private NativeList<uint> __ids;
         private NativeList<NetworkServerMessage> __messages;
 
@@ -169,7 +170,7 @@ namespace ZG
 
         public event Action<uint, bool> onActive;
 
-        public bool isConfigured => __pipelines.IsCreated;
+        public bool isConfigured => pipelines.Length > 0;
 
         public bool isListening => server.isListening;
 
@@ -282,6 +283,9 @@ namespace ZG
                 return ref world.GetOrCreateSystemUnmanaged<NetworkEntityManager>();
             }
         }
+
+        public NativeArray<NetworkPipeline> pipelines => world.EntityManager.GetBuffer<NetworkServerEntityChannel>(__entitySystem, true).AsNativeArray()
+                .Reinterpret<NetworkPipeline>();
 
         public bool IsExclusiveTransaction(uint id) => __exclusiveTransactionIdentityIDs != null && __exclusiveTransactionIdentityIDs.Contains(id);
 
@@ -477,9 +481,11 @@ namespace ZG
         {
             var driver = server.driver;
             int numPipelineTypes = pipelineTypes.Length;
-            __pipelines = new NativeArray<NetworkPipeline>(numPipelineTypes, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+            __entitySystem = world.GetExistingSystem<NetworkServerEntitySystem>();
+            var channels = world.EntityManager.GetBuffer<NetworkServerEntityChannel>(__entitySystem, false);
+            channels.ResizeUninitialized(numPipelineTypes);
             for (int i = 0; i < numPipelineTypes; ++i)
-                __pipelines[i] = driver.CreatePipeline(pipelineTypes[i]);
+                channels.ElementAt(i).pipeline = driver.CreatePipeline(pipelineTypes[i]);
         }
 
         public bool Listen(ushort port, NetworkFamily family = NetworkFamily.Ipv4)
@@ -529,7 +535,7 @@ namespace ZG
             server.Disconnect(connection);
         }
 
-        //注意：这些链接没有断开
+        //娉ㄦ剰锛氳繖浜涢摼鎺ユ病鏈夋柇寮�
         public bool Unregister(uint id, NetworkReader reader)
         {
             return __Unregister(_defaultChannel, id, rpcManager.GetConnection(id), reader);
@@ -584,7 +590,7 @@ namespace ZG
 
         public bool BeginRPC(int channel, uint id, uint handle, out NetworkWriter writer)
         {
-            if (commander.BeginCommand(id, __pipelines[channel], server.driver, out writer))
+            if (commander.BeginCommand(id, pipelines[channel], server.driver, out writer))
             {
                 writer.WritePackedUInt(handle);
 
@@ -622,7 +628,7 @@ namespace ZG
 
         public bool BeginSend(int channel, uint messageType, in NetworkConnection connection, out NetworkWriter writer)
         {
-            var statusCode = server.BeginSend(__pipelines[channel], connection, messageType, out writer);
+            var statusCode = server.BeginSend(pipelines[channel], connection, messageType, out writer);
             if (StatusCode.Success == statusCode)
                 return true;
 
@@ -670,7 +676,7 @@ namespace ZG
 
         public bool Send<T>(int channel, uint messageType, uint id, T message) where T : INetworkMessage
         {
-            if (commander.BeginCommand(id, __pipelines[channel], server.driver, out var writer))
+            if (commander.BeginCommand(id, pipelines[channel], server.driver, out var writer))
             {
                 message.Serialize(ref writer);
 
@@ -756,7 +762,7 @@ namespace ZG
                     if(identity != null)
                         identity._host = null;
 
-                    if (commander.BeginCommand(id, __pipelines[channel], server.driver, out var writer))
+                    if (commander.BeginCommand(id, pipelines[channel], server.driver, out var writer))
                     {
                         __SendUnregisterMessage(ref writer, id);
 
@@ -777,7 +783,7 @@ namespace ZG
                 }
                 else
                 {
-                    if (commander.BeginCommand(id, __pipelines[channel], server.driver, out var writer))
+                    if (commander.BeginCommand(id, pipelines[channel], server.driver, out var writer))
                     {
                         __SendUnregisterMessage(ref writer, id);
                         int result = commander.EndCommandDisconnect(type, writer);
@@ -844,7 +850,7 @@ namespace ZG
 
             int type = target.type;
 
-            var pipeline = __pipelines[channel];
+            var pipeline = pipelines[channel];
             var driver = server.driver;
             if (commander.BeginCommand(id, pipeline, driver, out var writer))
             {
@@ -945,8 +951,8 @@ namespace ZG
 
         void OnDestroy()
         {
-            if (__pipelines.IsCreated)
-                __pipelines.Dispose();
+            /*if (__pipelines.IsCreated)
+                __pipelines.Dispose();*/
 
             if (__ids.IsCreated)
                 __ids.Dispose();
