@@ -5,7 +5,6 @@ using Unity.Collections.LowLevel.Unsafe;
 using Unity.Entities;
 using Unity.Jobs;
 using Unity.Networking.Transport;
-using ZG.Unsafe;
 
 namespace ZG
 {
@@ -75,7 +74,7 @@ namespace ZG
 
             public BufferAccessor<NetworkServerEntityBuffer> buffers;
 
-            public NativeQueue<Result> results;
+            public NativeQueue<Result>.ParallelWriter results;
 
             public unsafe void Execute(int index)
             {
@@ -93,15 +92,18 @@ namespace ZG
                 void* source, destination;
                 int typeSize, bufferLength;
                 TypeIndex typeIndex;
-                DynamicComponentTypeHandle componentType;
+                NetworkServerEntityComponent component;
                 DynamicBuffer<NetworkServerEntityBuffer> buffer;
                 for(i = 0; i < numComponents; ++i)
                 {
-                    ref var component = ref components.ElementAt(i);
+                    component = components[i];
                     if (component.componentTypeIndex < 0 || component.componentTypeIndex >= componentTypeCount)
                         continue;
 
-                    componentType = componentTypes[component.componentTypeIndex];
+                    ref var componentType = ref componentTypes[component.componentTypeIndex];
+                    if(!chunk.Has(ref componentType))
+                        continue;
+                    
                     typeIndex = componentType.GetTypeIndex();
                     typeSize = TypeManager.GetTypeInfo(typeIndex).TypeSize;
 
@@ -114,8 +116,8 @@ namespace ZG
                     {
                         var array = chunk.GetDynamicComponentDataArrayReinterpret<byte>(ref componentType,
                             typeSize);
-                        source = UnsafeUtility.AddressOf(ref array.ElementAt(index * typeSize));
-
+                        source = (byte*)array.GetUnsafeReadOnlyPtr() +  index * typeSize;
+                        
                         bufferLength = 1;
                     }
                     
@@ -124,7 +126,7 @@ namespace ZG
                     buffer = buffers[index];
 
                     ref var bufferRange = ref bufferRanges.ElementAt(i);
-                    if (bufferRange.length < 1 || bufferRange.length + bufferRange.offset >= buffer.Length)
+                    if (bufferRange.length < 1 || bufferRange.length + bufferRange.offset > buffer.Length)
                     {
                         bufferRange.offset = buffer.Length;
                         bufferRange.length = bufferLength;
@@ -134,7 +136,14 @@ namespace ZG
                     }
                     else
                     {
-                        if (bufferLength != bufferRange.length)
+                        if (bufferLength == bufferRange.length)
+                        {
+                            destination = UnsafeUtility.AddressOf(ref buffer.ElementAt(bufferRange.offset));
+
+                            if (UnsafeUtility.MemCmp(source, destination, bufferLength) == 0)
+                                continue;
+                        }
+                        else
                         {
                             buffer.RemoveRange(bufferRange.offset, bufferRange.length);
 
@@ -145,29 +154,23 @@ namespace ZG
                                 if (temp.offset > bufferRange.offset)
                                     temp.offset -= bufferRange.length;
                             }
-                                
+                            
                             bufferRange.offset = buffer.Length;
                             bufferRange.length = bufferLength;
                             buffer.ResizeUninitialized(bufferRange.offset + bufferRange.length);
 
-                            source = null;
+                            destination = UnsafeUtility.AddressOf(ref buffer.ElementAt(bufferRange.offset));
                         }
-                        
-                        destination = UnsafeUtility.AddressOf(ref buffer.ElementAt(bufferRange.offset));
-                        
-                        if (source != null &&
-                            UnsafeUtility.MemCmp(source, destination, bufferLength) == 0)
-                            continue;
+                         
+                        result.componentIndex = i;
+                        result.idStartIndex = ids.Length;
+                        result.additionalIDCount = __GetIDCount(component.additionalIDComponentTypeIndex, index, ref ids);
+                        result.maskIDCount = __GetIDCount(component.maskIDComponentTypeIndex, index, ref ids);
+
+                        results.Enqueue(result);
                     }
 
                     UnsafeUtility.MemCpy(destination, source, bufferLength);
-
-                    result.componentIndex = i;
-                    result.idStartIndex = ids.Length;
-                    result.additionalIDCount = __GetIDCount(component.additionalIDComponentTypeIndex, index, ref ids);
-                    result.maskIDCount = __GetIDCount(component.maskIDComponentTypeIndex, index, ref ids);
-
-                    results.Enqueue(result);
                 }
             }
 
@@ -231,7 +234,7 @@ namespace ZG
 
             public BufferTypeHandle<NetworkServerEntityBuffer> bufferType;
 
-            public NativeQueue<Result> results;
+            public NativeQueue<Result>.ParallelWriter results;
 
             public void Execute(in ArchetypeChunk chunk, int unfilteredChunkIndex, bool useEnabledMask,
                 in v128 chunkEnabledMask)
@@ -346,25 +349,27 @@ namespace ZG
         public static int GetOrCreateComponentTypeIndex(in WorldUnmanaged world, in TypeIndex typeIndex)
         {
             ref var system = ref world.GetExistingSystemUnmanaged<NetworkServerEntitySystem>();
-            if (system.__typeIndices.TryGetValue(typeIndex, out int index))
+            if (!system.__typeIndices.TryGetValue(typeIndex, out int index))
             {
                 index = system.__componentTypeCount++;
 
-                ref var state = ref world.GetExistingSystemState<NetworkServerEntitySystem>();
-                ComponentType componentType;
-                componentType.TypeIndex = typeIndex;
-                componentType.AccessModeType = ComponentType.AccessMode.ReadOnly;
-
-                var typeHandle = state.GetDynamicComponentTypeHandle(componentType);
-                if (index > 0)
-                    system.__componentTypes[index] = typeHandle;
-                else
-                {
-                    for (int i = 0; i < BurstCompatibleTypeArrayReadOnly.LENGTH; ++i)
-                        system.__componentTypes[i] = typeHandle;
-                }
+                system.__typeIndices[typeIndex] = index;
             }
 
+            ref var state = ref world.GetExistingSystemState<NetworkServerEntitySystem>();
+            ComponentType componentType;
+            componentType.TypeIndex = typeIndex;
+            componentType.AccessModeType = ComponentType.AccessMode.ReadOnly;
+
+            var typeHandle = state.GetDynamicComponentTypeHandle(componentType);
+            if (index > 0)
+                system.__componentTypes[index] = typeHandle;
+            else
+            {
+                for (int i = 0; i < BurstCompatibleTypeArrayReadOnly.LENGTH; ++i)
+                    system.__componentTypes[i] = typeHandle;
+            }
+            
             return index;
         }
 
@@ -373,7 +378,8 @@ namespace ZG
         {
             using (var builder = new EntityQueryBuilder(Allocator.Temp))
                 __group = builder
-                    .WithAll<NetworkIdentity, NetworkServerEntityComponent, NetworkServerEntityID>()
+                    .WithAll<NetworkIdentity, NetworkServerEntityComponent>()
+                    .WithAllRW<NetworkServerEntityID>()
                     .WithAllRW<NetworkServerEntityBufferRange, NetworkServerEntityBuffer>()
                     .WithOptions(EntityQueryOptions.IncludeDisabledEntities)
                     .Build(ref state);
@@ -421,7 +427,7 @@ namespace ZG
             collect.idType = __idType.UpdateAsRef(ref state);
             collect.bufferRangeType = __bufferRangeType.UpdateAsRef(ref state);
             collect.bufferType = __bufferType.UpdateAsRef(ref state);
-            collect.results = __results;
+            collect.results = __results.AsParallelWriter();
 
             var jobHandle = collect.ScheduleParallelByRef(__group, state.Dependency);
 

@@ -22,7 +22,7 @@ namespace ZG
             Type additionalIDComponentType,
             Type maskIDComponentType,
             int channel = 0,
-            int rpcType = -1)
+            int rpcType = (int)NetworkRPCType.Normal)
         {
             this.componentType = componentType;
             this.additionalIDComponentType = additionalIDComponentType;
@@ -42,92 +42,95 @@ namespace ZG
         {
             get
             {
-                if (__components == null)
-                    __components = new List<Component>();
-                else
-                    __components.Clear();
-
-                transform.GetComponentsInChildren<Component>(true, __components.Add, typeof(IEntityComponentRoot));
-
-                Type type;
-                IEnumerable<NetworkServerComponentAttribute> componentAttributes;
-                foreach (var component in __components)
-                {
-                    type = component == null ? null : component.GetType();
-                    while (type != null && type != typeof(MonoBehaviour) && type != typeof(Behaviour))
+                if (__Visit(transform, x => x.componentType != null))
+                    return new[]
                     {
-                        componentAttributes = type.GetCustomAttributes<NetworkServerComponentAttribute>(false);
-                        foreach (var componentAttribute in componentAttributes)
-                        {
-                            if (componentAttribute.componentType == null)
-                                continue;
+                        typeof(NetworkServerEntityComponent),
+                        typeof(NetworkServerEntityID),
+                        typeof(NetworkServerEntityBufferRange),
+                        typeof(NetworkServerEntityBuffer)
+                    };
 
-                            return new[]
-                            {
-                                typeof(NetworkServerEntityComponent),
-                                typeof(NetworkServerEntityID),
-                                typeof(NetworkServerEntityBufferRange),
-                                typeof(NetworkServerEntityBuffer)
-                            };
-                        }
-
-                        type = type.BaseType;
-                    }
-                }
 
                 return null;
             }
         }
-        
+
         void IEntityComponent.Init(in Entity entity, EntityComponentAssigner assigner)
+        {
+            var targetEntity = entity;
+            var world = base.world.Unmanaged;
+            __Visit(transform, x =>
+            {
+                if (x.componentType == null)
+                    return false;
+
+                NetworkServerEntityComponent entityComponent;
+                entityComponent.componentTypeIndex = NetworkServerEntitySystem.GetOrCreateComponentTypeIndex(
+                    world,
+                    TypeManager.GetTypeIndex(x.componentType));
+
+                if (x.additionalIDComponentType == null)
+                    entityComponent.additionalIDComponentTypeIndex = -1;
+                else
+                    entityComponent.additionalIDComponentTypeIndex =
+                        NetworkServerEntitySystem.GetOrCreateComponentTypeIndex(world,
+                            TypeManager.GetTypeIndex(x.additionalIDComponentType));
+
+                if (x.maskIDComponentType == null)
+                    entityComponent.maskIDComponentTypeIndex = -1;
+                else
+                    entityComponent.maskIDComponentTypeIndex =
+                        NetworkServerEntitySystem.GetOrCreateComponentTypeIndex(world,
+                            TypeManager.GetTypeIndex(x.maskIDComponentType));
+
+                entityComponent.rpcType = x.rpcType;
+                entityComponent.handle = x.handle;
+                entityComponent.channel = x.channel;
+
+                assigner.SetBuffer(EntityComponentAssigner.BufferOption.Append, targetEntity, entityComponent);
+
+                return false;
+            });
+        }
+        
+        private static bool __Visit(Transform transform, Predicate<NetworkServerComponentAttribute> predicate)
         {
             if (__components == null)
                 __components = new List<Component>();
             else
                 __components.Clear();
 
-            transform.GetComponentsInChildren<Component>(true, __components.Add, typeof(IEntityComponentRoot));
-            
-            var world = base.world.Unmanaged;
-            NetworkServerEntityComponent entityComponent;
+            transform.GetComponents(__components);
+            IEnumerable<NetworkServerComponentAttribute> componentAttributes;
             Type type;
-            IEnumerable<NetworkServerComponentAttribute> serverComponentAttributes;
             foreach (var component in __components)
             {
                 type = component == null ? null : component.GetType();
                 while (type != null && type != typeof(MonoBehaviour) && type != typeof(Behaviour))
                 {
-                    serverComponentAttributes = type.GetCustomAttributes<NetworkServerComponentAttribute>(false);
-                    foreach (var networkComponentAttribute in serverComponentAttributes)
+                    componentAttributes = type.GetCustomAttributes<NetworkServerComponentAttribute>(false);
+                    foreach (var componentAttribute in componentAttributes)
                     {
-                        entityComponent.componentTypeIndex = NetworkServerEntitySystem.GetOrCreateComponentTypeIndex(
-                            world,
-                            TypeManager.GetTypeIndex(networkComponentAttribute.componentType));
-
-                        if (networkComponentAttribute.additionalIDComponentType == null)
-                            entityComponent.additionalIDComponentTypeIndex = -1;
-                        else
-                            entityComponent.additionalIDComponentTypeIndex =
-                                NetworkServerEntitySystem.GetOrCreateComponentTypeIndex(world,
-                                    TypeManager.GetTypeIndex(networkComponentAttribute.additionalIDComponentType));
-
-                        if (networkComponentAttribute.maskIDComponentType == null)
-                            entityComponent.maskIDComponentTypeIndex = -1;
-                        else
-                            entityComponent.maskIDComponentTypeIndex =
-                                NetworkServerEntitySystem.GetOrCreateComponentTypeIndex(world,
-                                    TypeManager.GetTypeIndex(networkComponentAttribute.maskIDComponentType));
-
-                        entityComponent.rpcType = networkComponentAttribute.rpcType;
-                        entityComponent.handle = networkComponentAttribute.handle;
-                        entityComponent.channel = networkComponentAttribute.channel;
-                        
-                        assigner.SetBuffer(EntityComponentAssigner.BufferOption.Append, entity, entityComponent);
+                        if (predicate(componentAttribute))
+                            return true;
                     }
 
                     type = type.BaseType;
                 }
             }
+
+            foreach (Transform child in transform)
+            {
+                if(child.GetComponent<IEntityComponentRoot>() != null)
+                    continue;
+
+                if (__Visit(child, predicate))
+                    return true;
+            }
+
+            return false;
         }
+
     }
 }

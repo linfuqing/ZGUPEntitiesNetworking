@@ -52,7 +52,7 @@ namespace ZG
             return reader.ReadByte() != 0;
         }
 
-        public static unsafe T Read<T>(ref DataStreamReader reader) where T : unmanaged
+        public static unsafe T Read<T>(this ref DataStreamReader reader) where T : unmanaged
         {
             T data;
             var array = NativeArrayUnsafeUtility.ConvertExistingDataToNativeArray<byte>(&data, UnsafeUtility.SizeOf<T>(), Allocator.None);
