@@ -348,9 +348,12 @@ namespace ZG
 
         public static int GetOrCreateComponentTypeIndex(in WorldUnmanaged world, in TypeIndex typeIndex)
         {
+            bool isNew = false;
             ref var system = ref world.GetExistingSystemUnmanaged<NetworkServerEntitySystem>();
             if (!system.__typeIndices.TryGetValue(typeIndex, out int index))
             {
+                isNew = true;
+                
                 index = system.__componentTypeCount++;
 
                 system.__typeIndices[typeIndex] = index;
@@ -362,13 +365,13 @@ namespace ZG
             componentType.AccessModeType = ComponentType.AccessMode.ReadOnly;
 
             var typeHandle = state.GetDynamicComponentTypeHandle(componentType);
-            if (index > 0)
-                system.__componentTypes[index] = typeHandle;
-            else
+            if (isNew && index == 0)
             {
                 for (int i = 0; i < BurstCompatibleTypeArrayReadOnly.LENGTH; ++i)
                     system.__componentTypes[i] = typeHandle;
             }
+            else
+                system.__componentTypes[index] = typeHandle;
             
             return index;
         }

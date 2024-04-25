@@ -80,7 +80,7 @@ namespace ZG
 
         public static void WritePackedDouble(this ref DataStreamWriter writer, double value) => writer.WritePackedDouble(value, StreamCompressionModel.Default);
 
-        public static unsafe bool Write<T>(ref DataStreamWriter writer, T value) where T : unmanaged
+        public static unsafe bool Write<T>(this ref DataStreamWriter writer, T value) where T : unmanaged
         {
             var array = NativeArrayUnsafeUtility.ConvertExistingDataToNativeArray<byte>(&value, UnsafeUtility.SizeOf<T>(), Allocator.None);
 #if ENABLE_UNITY_COLLECTIONS_CHECKS
