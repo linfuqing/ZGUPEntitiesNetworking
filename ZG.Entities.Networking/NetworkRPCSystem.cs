@@ -3682,14 +3682,10 @@ namespace ZG
 
         public static EntityQuery GetEntityQuery(ref SystemState state)
         {
-            return state.GetEntityQuery(new EntityQueryDesc()
-            {
-                All = new ComponentType[]
-                {
-                    ComponentType.ReadOnly<NetworkRPCController>(),
-                }, 
-                Options = EntityQueryOptions.IncludeSystems
-            });
+            using (var builder = new EntityQueryBuilder(Allocator.Temp))
+                return builder.WithAll<NetworkRPCController>()
+                    .WithOptions(EntityQueryOptions.IncludeSystems)
+                    .Build(ref state);
         }
 
         public NetworkRPCController(AllocatorManager.AllocatorHandle allocator)
@@ -3789,12 +3785,14 @@ namespace ZG
 
         private EntityQuery __controllerGroup;
 
+        [BurstCompile]
         public void OnCreate(ref SystemState state)
         {
             __managerGroup = NetworkServerManager.GetEntityQuery(ref state);
             __controllerGroup = NetworkRPCController.GetEntityQuery(ref state);
         }
 
+        [BurstCompile]
         public void OnDestroy(ref SystemState state)
         {
 
