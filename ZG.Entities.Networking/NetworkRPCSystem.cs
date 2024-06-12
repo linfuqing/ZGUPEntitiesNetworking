@@ -599,8 +599,7 @@ namespace ZG
                                         {
                                             statusCode = (StatusCode)result;
 
-                                            if (StatusCode.Success != statusCode)
-                                                __LogUnregisterError(statusCode);
+                                            __LogUnregisterError(statusCode);
                                         }
 
                                         writer = default;
@@ -608,7 +607,7 @@ namespace ZG
 
                                     if (!writer.IsCreated)
                                     {
-                                        statusCode = (StatusCode)driver.BeginSend(identity.pipeline, identity.connection, out writer);
+                                        statusCode = driver.BeginSend(identity.pipeline, identity.connection, out writer);
                                         if (StatusCode.Success != statusCode)
                                         {
                                             writer = default;
@@ -647,8 +646,7 @@ namespace ZG
                     {
                         statusCode = (StatusCode)result;
 
-                        if (StatusCode.Success != statusCode)
-                            __LogUnregisterError(statusCode);
+                        __LogUnregisterError(statusCode);
                     }
                 }
 
@@ -1221,7 +1219,7 @@ namespace ZG
 
 #if DEBUG
                     if (!isActive)
-                        Debug.LogError($"{sourceID} RPC to {destinationID} with a deactive message.");
+                        Debug.LogError($"{sourceID} RPC to {destinationID} with a inactive message.");
 #endif
 
                     UnityEngine.Assertions.Assert.AreNotEqual(0, version);
@@ -1715,8 +1713,7 @@ namespace ZG
                 unregisterMessage.versions = versions;
 #endif
 
-                UnsafeParallelHashSet<uint> nodeIDs = default;
-                NativeHashSet<uint> idsToBeChanged = default;
+                UnsafeHashSet<uint> nodeIDs = default, idsToBeChanged = default;
                 //NativeParallelHashMap<int, float> nodeDistances = default;
                 NativeParallelMultiHashMapIterator<uint> iterator;
                 CommandIndex commandIndex;
@@ -1871,7 +1868,7 @@ namespace ZG
                                         if (((1 << nodeIdentity.layer) & layerMask) != 0)
                                         {
                                             if (!nodeIDs.IsCreated)
-                                                nodeIDs = new UnsafeParallelHashSet<uint>(1, Allocator.Temp);
+                                                nodeIDs = new UnsafeHashSet<uint>(1, Allocator.Temp);
 
                                             nodeIDs.Add(nodeIdentity.value);
                                         }
@@ -1942,7 +1939,7 @@ namespace ZG
                                     if (((1 << nodeIdentity.layer) & layerMask) != 0)
                                     {
                                         if (!nodeIDs.IsCreated)
-                                            nodeIDs = new UnsafeParallelHashSet<uint>(1, Allocator.Temp);
+                                            nodeIDs = new UnsafeHashSet<uint>(1, Allocator.Temp);
 
                                         nodeIDs.Add(nodeIdentity.value);
                                     }
@@ -2228,10 +2225,10 @@ namespace ZG
                 return true;
             }
 
-            private void __MaskBeChanged(uint id, ref NativeHashSet<uint> idsToBeChanged)
+            private void __MaskBeChanged(uint id, ref UnsafeHashSet<uint> idsToBeChanged)
             {
                 if (!idsToBeChanged.IsCreated)
-                    idsToBeChanged = new NativeHashSet<uint>(1, Allocator.Temp);
+                    idsToBeChanged = new UnsafeHashSet<uint>(1, Allocator.Temp);
 
                 idsToBeChanged.Add(id);
             }

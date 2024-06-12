@@ -47,8 +47,6 @@ namespace ZG
 
         bool isExclusivingTransaction { get; }
 
-        int maxConnectionCount { get; set; }
-
         int connectionCount { get; }
 
         bool IsConnected(in NetworkConnection connection);
@@ -179,19 +177,6 @@ namespace ZG
             get;
 
             private set;
-        }
-
-        public int maxConnectionCount
-        {
-            get => _maxConnectAttempts;
-
-            set
-            {
-                if (isConfigured)
-                    throw new InvalidOperationException();
-
-                _maxConnectAttempts = value;
-            }
         }
 
         public int connectionCount => server.connectionCount;
