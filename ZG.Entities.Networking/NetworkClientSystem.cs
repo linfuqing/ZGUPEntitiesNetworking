@@ -367,9 +367,9 @@ namespace ZG
 
         public NativeHashMap<uint, UnsafeBuffer> buffers => __buffers;
 
-        public NetworkClient(in AllocatorManager.AllocatorHandle allocator)
+        public NetworkClient(in AllocatorManager.AllocatorHandle allocator, in NetworkSettings settings)
         {
-            __driver = NetworkDriver.Create();
+            __driver = NetworkDriver.Create(settings);
 
             __buffer = new NativeBuffer(allocator, 1);
 
@@ -538,12 +538,12 @@ namespace ZG
             get;
         }
 
-        public NetworkClientManager(in AllocatorManager.AllocatorHandle allocator)
+        public NetworkClientManager(in AllocatorManager.AllocatorHandle allocator, in NetworkSettings settings)
         {
             __lookupJobManager = new UnsafeList<LookupJobManager>(1, allocator, NativeArrayOptions.UninitializedMemory);
             __lookupJobManager.Resize(1, NativeArrayOptions.ClearMemory);
 
-            client = new NetworkClient(allocator);
+            client = new NetworkClient(allocator, settings);
         }
 
         public void Dispose()
@@ -576,21 +576,46 @@ namespace ZG
             private set;
         }
 
+        public static NetworkClientManager CreateManager(in WorldUnmanaged world, in NetworkSettings settings)
+        {
+            var manager = new NetworkClientManager(Allocator.Persistent, settings);
+
+            var systemHandle = world.GetExistingUnmanagedSystem<NetworkClientSystem>();
+
+            ref var system = ref world.GetUnsafeSystemRef<NetworkClientSystem>(systemHandle);
+            if (system.manager.isCreated)
+            {
+                system.manager.Dispose();
+
+                world.EntityManager.SetComponentData(systemHandle, manager);
+            }
+            else
+                world.EntityManager.AddComponentData(systemHandle, manager);
+
+            system.manager = manager;
+
+            return manager;
+        }
+
         //[BurstCompile]
         public void OnCreate(ref SystemState state)
         {
-            manager = new NetworkClientManager(Allocator.Persistent);
+            //manager = new NetworkClientManager(Allocator.Persistent);
         }
 
         [BurstCompile]
         public void OnDestroy(ref SystemState state)
         {
-            manager.Dispose();
+            if(manager.isCreated)
+                manager.Dispose();
         }
 
         [BurstCompile]
         public void OnUpdate(ref SystemState state)
         {
+            if (!manager.isCreated)
+                return;
+            
             state.Dependency = manager.Update(state.Dependency);
         }
     }

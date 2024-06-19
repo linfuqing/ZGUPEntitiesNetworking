@@ -7,6 +7,7 @@ using Unity.Networking.Transport.Error;
 using UnityEngine;
 using NetworkReader = Unity.Collections.DataStreamReader;
 using NetworkWriter = Unity.Collections.DataStreamWriter;
+using static Unity.Networking.Transport.NetworkParameterConstants;
 
 namespace ZG
 {
@@ -116,6 +117,25 @@ namespace ZG
 
         public long maxUpdateTicksPerFrame = TimeSpan.TicksPerMillisecond << 6;
 
+        [SerializeField]
+        internal int _connectTimeoutMS = ConnectTimeoutMS;
+        [SerializeField]
+        internal int _maxConnectAttempts = MaxConnectAttempts;
+        [SerializeField]
+        internal int _disconnectTimeoutMS = DisconnectTimeoutMS;
+        [SerializeField]
+        internal int _heartbeatTimeoutMS = HeartbeatTimeoutMS;
+        [SerializeField]
+        internal int _reconnectionTimeoutMS = ReconnectionTimeoutMS;
+        [SerializeField]
+        internal int _maxFrameTimeMS = 0;
+        [SerializeField]
+        internal int _fixedFrameTimeMS = 0;
+        [SerializeField]
+        internal int _receiveQueueCapacity = 4096;//ReceiveQueueCapacity;
+        [SerializeField]
+        internal int _sendQueueCapacity = 4096;// SendQueueCapacity;
+
         private bool __isInitAndCreateSync;
         private bool __isBusy;
         private INetworkClientWrapper __wrapper;
@@ -187,8 +207,24 @@ namespace ZG
         {
             get
             {
-                if(!__manager.isCreated)
-                    __manager = world.GetExistingSystemUnmanaged<NetworkClientSystem>().manager;
+                if (!__manager.isCreated)
+                {
+                    
+                    var settings = new NetworkSettings(Allocator.Temp);
+
+                    settings.WithNetworkConfigParameters(
+                        _connectTimeoutMS,
+                        _maxConnectAttempts,
+                        _disconnectTimeoutMS,
+                        _heartbeatTimeoutMS,
+                        _reconnectionTimeoutMS,
+                        _maxFrameTimeMS,
+                        _fixedFrameTimeMS,
+                        _receiveQueueCapacity,
+                        _sendQueueCapacity);
+
+                    __manager = NetworkClientSystem.CreateManager(world.Unmanaged, settings);
+                }
 
                 __manager.lookupJobManager.CompleteReadWriteDependency();
 
