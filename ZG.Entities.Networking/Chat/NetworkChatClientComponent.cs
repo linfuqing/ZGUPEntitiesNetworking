@@ -6,7 +6,12 @@ namespace ZG
 {
     public class NetworkChatClientComponent : MonoBehaviour
     {
-        public delegate void Talk(uint id, ulong channel, in string name, DataStreamReader reader);
+        public delegate void Talk(
+            NetworkChatMessageType messageType, 
+            uint id, 
+            ulong channel, 
+            in string name, 
+            DataStreamReader reader);
 
         public event Talk onTalk;
 
@@ -72,7 +77,12 @@ namespace ZG
                     client.GetMessages(channel, ref __messages);
 
                     foreach (var message in __messages)
-                        onTalk(message.id, channel, message.name.ToString(), message.stream);
+                        onTalk(
+                            message.type, 
+                            message.id, 
+                            channel, 
+                            message.name.ToString(), 
+                            message.stream);
                 }
             }
         }

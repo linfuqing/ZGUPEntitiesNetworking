@@ -734,7 +734,7 @@ namespace ZG
 
                                     if (!writer.IsCreated)
                                     {
-                                        statusCode = (StatusCode)driver.BeginSend(identity.pipeline, identity.connection, out writer);
+                                        statusCode = driver.BeginSend(identity.pipeline, identity.connection, out writer);
                                         if (StatusCode.Success != statusCode)
                                         {
                                             isConnected = false;

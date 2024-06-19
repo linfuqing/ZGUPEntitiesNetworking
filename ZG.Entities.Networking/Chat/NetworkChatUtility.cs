@@ -1,6 +1,6 @@
 namespace ZG
 {
-    public enum NetworkChatMessageType
+    public enum NetworkChatMessageType : byte
     {
         Leave,
         Join,

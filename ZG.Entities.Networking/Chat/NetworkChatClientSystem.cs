@@ -19,6 +19,7 @@ namespace ZG
 
         public struct Message : System.IComparable<Message>
         {
+            public NetworkChatMessageType type;
             public int index;
             public uint id;
             public FixedString32Bytes name;
@@ -69,6 +70,7 @@ namespace ZG
                             do
                             {
                                 messageSize = (int)stream.ReadPackedUInt(model);
+                                message.type = (NetworkChatMessageType)stream.ReadByte();
                                 message.id = stream.ReadPackedUInt(model);
                                 channel = stream.ReadPackedULong(model);
                                 message.name = stream.ReadFixedString32();
@@ -97,8 +99,7 @@ namespace ZG
                                     {
                                         statusCode = (StatusCode)result;
 
-                                        if (StatusCode.Success != statusCode)
-                                            __LogError(statusCode);
+                                        __LogError(statusCode);
                                     }
 
                                     writer = default;
@@ -128,8 +129,7 @@ namespace ZG
                                 {
                                     statusCode = (StatusCode)result;
 
-                                    if (StatusCode.Success != statusCode)
-                                        __LogError(statusCode);
+                                    __LogError(statusCode);
                                 }
                             }
                             break;

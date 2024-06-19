@@ -20,9 +20,10 @@ namespace ZG
 
         private struct Result
         {
-            public NetworkConnection connection;
-            public ulong channel;
+            public NetworkChatMessageType messageType;
             public uint id;
+            public ulong channel;
+            public NetworkConnection connection;
             public UnsafeBlock block;
 
             public DataStreamReader stream => new DataStreamReader(block.AsArray<byte>());
@@ -90,7 +91,6 @@ namespace ZG
                     return;
                 }
 
-                NetworkChatMessageType messageType;
                 NetworkEvent.Type cmd;
                 DataStreamReader stream;
                 while (true)
@@ -103,12 +103,12 @@ namespace ZG
                         case NetworkEvent.Type.Data:
                             do
                             {
-                                messageType = (NetworkChatMessageType)stream.ReadPackedUInt(model);
-                                switch (messageType)
+                                result.messageType = (NetworkChatMessageType)stream.ReadPackedUInt(model);
+                                switch (result.messageType)
                                 {
                                     case NetworkChatMessageType.Leave:
-                                        result.channel = stream.ReadPackedULong(model);
                                         result.id = 0;
+                                        result.channel = stream.ReadPackedULong(model);
                                         result.block = default;
                                         leaveOrJoinResults.Enqueue(result);
                                         break;
@@ -133,7 +133,7 @@ namespace ZG
                                     case NetworkChatMessageType.Talk:
                                     case NetworkChatMessageType.Whisper:
                                         uint id = 0;
-                                        if (messageType == NetworkChatMessageType.Whisper)
+                                        if (result.messageType == NetworkChatMessageType.Whisper)
                                             id = stream.ReadPackedUInt(model);
 
                                         result.channel = stream.ReadPackedULong(model);
@@ -154,7 +154,7 @@ namespace ZG
 
                                         if (result.id == 0)
                                             UnityEngine.Debug.LogError($"Talk: the channel {result.channel} has not been joined!");
-                                        else if(messageType == NetworkChatMessageType.Talk)
+                                        else if(result.messageType == NetworkChatMessageType.Talk)
                                         {
                                             foreach (var connection in channelConnections.GetValuesForKey(result.channel))
                                                 talkingResults.Add(connection, result);
@@ -197,6 +197,7 @@ namespace ZG
             private void __Disconnect(in NetworkConnection connection, DataStreamReader stream)
             {
                 Result result;
+                result.messageType = NetworkChatMessageType.Leave;
                 result.block = default;
                 result.id = 0;
                 result.connection = connection;
@@ -333,15 +334,14 @@ namespace ZG
                 foreach(var talkingResult in talkingResults.GetValuesForKey(connection))
                 {
                     messageSize = talkingResult.stream.Length - talkingResult.stream.GetBytesRead();
-                    if (writer.IsCreated && writer.Capacity - writer.Length < messageSize + (UnsafeUtility.SizeOf<uint>() << 1))
+                    if (writer.IsCreated && writer.Capacity - writer.Length < messageSize + (UnsafeUtility.SizeOf<uint>() << 2))
                     {
                         result = driver.EndSend(writer);
                         if (result < 0)
                         {
                             statusCode = (StatusCode)result;
 
-                            if (StatusCode.Success != statusCode)
-                                __LogError(statusCode);
+                            __LogError(statusCode);
                         }
 
                         writer = default;
@@ -359,6 +359,7 @@ namespace ZG
                     }
 
                     writer.WritePackedUInt((uint)messageSize, model);
+                    writer.WriteByte((byte)talkingResult.messageType);
                     writer.WritePackedUInt(talkingResult.id, model);
                     writer.WritePackedULong(talkingResult.channel, model);
 
@@ -397,8 +398,7 @@ namespace ZG
                     {
                         statusCode = (StatusCode)result;
 
-                        if (StatusCode.Success != statusCode)
-                            __LogError(statusCode);
+                        __LogError(statusCode);
                     }
                 }
             }
