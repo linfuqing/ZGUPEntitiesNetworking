@@ -40,15 +40,18 @@ namespace ZG
 
             public NativeParallelMultiHashMap<NetworkConnection, Result> talkingResults;
 
+            [ReadOnly]
+            public NativeParallelMultiHashMap<ulong, NetworkConnection> channelConnections;
+
             public void Execute()
             {
                 NetworkConnection connection;
                 while ((connection = driver.Accept()) != default(NetworkConnection))
                     connections.Add(connection);
 
-                int numEvents = 0, numConnections = connections.Length;
-                for (int i = 0; i < numConnections; i++)
-                    numEvents += math.max(1, driver.GetEventQueueSizeForConnection(connections[i]));
+                int numEvents = 0, numConnections = connections.Length, numChannelConnections = math.max(1,channelConnections.Count());
+                for (int i = 0; i < numConnections; ++i)
+                    numEvents += math.max(2, math.max(1, driver.GetEventQueueSizeForConnection(connections[i])) * numChannelConnections);
 
                 talkingResults.Clear();
                 talkingResults.Capacity = math.max(talkingResults.Capacity, numEvents);
@@ -80,7 +83,7 @@ namespace ZG
 
             public NativeQueue<Result>.ParallelWriter leaveOrJoinResults;
 
-            public unsafe void Execute(int index)
+            public void Execute(int index)
             {
                 Result result;
                 result.connection = connections[index];
@@ -161,6 +164,7 @@ namespace ZG
                                         }
                                         else
                                         {
+                                            NetworkConnection temp;
                                             bool isContains = false;
                                             foreach (var connection in channelConnections.GetValuesForKey(result.channel))
                                             {
@@ -169,6 +173,13 @@ namespace ZG
                                                     if (identity.channel == result.channel && identity.id == id)
                                                     {
                                                         talkingResults.Add(connection, result);
+
+                                                        if (result.connection != connection)
+                                                        {
+                                                            temp = result.connection;
+                                                            result.connection = connection;
+                                                            talkingResults.Add(temp, result);
+                                                        }
 
                                                         isContains = true;
 
@@ -479,6 +490,7 @@ namespace ZG
             acceptConnections.buffer = __buffer;
             acceptConnections.connections = __connections;
             acceptConnections.talkingResults = __talkingResults;
+            acceptConnections.channelConnections = __channelConnections;
             jobHandle = acceptConnections.ScheduleByRef(jobHandle);
 
             var connections = __connections.AsDeferredJobArray();

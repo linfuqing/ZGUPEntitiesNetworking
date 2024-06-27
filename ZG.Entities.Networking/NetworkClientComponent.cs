@@ -138,6 +138,13 @@ namespace ZG
 
         private bool __isInitAndCreateSync;
         private bool __isBusy;
+        
+#if DEBUG
+        private int __rpcTimes;
+        private int __rpcSize;
+        private int __rpcFrame;
+#endif
+        
         private INetworkClientWrapper __wrapper;
         private World __world;
         private NetworkClientManager __manager;
@@ -558,8 +565,28 @@ namespace ZG
 
             int result = client.EndSend(writer);
 
-            if (result <= 0)
+#if DEBUG
+            if (result > 0)
+            {
+                int rpcFrame = Time.frameCount;
+                if (rpcFrame != __rpcFrame)
+                {
+                    __rpcFrame = rpcFrame;
+
+                    __rpcTimes = 0;
+
+                    __rpcSize = 0;
+                }
+                    
+                ++__rpcTimes;
+                __rpcSize += writer.Length;
+            }
+            else
+                Debug.LogError($"[EndRPC]{(StatusCode)result},times : {__rpcTimes},sizes : {__rpcSize}");
+#else
+            if(result <= 0)
                 Debug.LogError($"[EndRPC]{(StatusCode)result}");
+#endif
 
             return result;
         }
