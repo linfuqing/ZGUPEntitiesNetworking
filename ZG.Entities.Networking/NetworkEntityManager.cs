@@ -25,7 +25,7 @@ namespace ZG
         public static int GetType(uint value) => (int)(value >> 1);
     }
 
-    [DisableAutoCreation, BurstCompile]
+    [DisableAutoCreation, BurstCompile, CreateAfter(typeof(EntityCommandFactorySystem))]
     public partial struct NetworkEntityManager : ISystem
     {
         private struct Identity
