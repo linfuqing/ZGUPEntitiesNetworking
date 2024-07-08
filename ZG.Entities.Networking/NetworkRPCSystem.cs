@@ -2262,11 +2262,10 @@ namespace ZG
             {
                 destinations.Clear();
 
-                int minCommandByteOffset;
                 foreach (var command in sources)
                 {
-                    if (minCommandByteOffsets.TryGetValue(command.id, out minCommandByteOffset) && minCommandByteOffset > command.bufferSegment.byteOffset)
-                        continue;
+                    /*if (minCommandByteOffsets.TryGetValue(command.id, out minCommandByteOffset) && minCommandByteOffset > command.bufferSegment.byteOffset)
+                        continue;*/
 
                     switch (command.type)
                     {
@@ -2291,8 +2290,6 @@ namespace ZG
 
                 sources.Clear();
 
-                minCommandByteOffsets.Clear();
-
                 //rpcIDs.Clear();
 
                 int numRPCIDs = rpcIDs.Length;
@@ -2312,8 +2309,29 @@ namespace ZG
                     {
                         int count = ids.ConvertToUniqueArray();
                         rpcIDs.AddRange(ids.GetSubArray(0, count));
+
+                        int minCommandByteOffset;
+                        RPCCommand command;
+                        NativeParallelMultiHashMapIterator<uint> iterator;
+                        foreach (var id in ids)
+                        {
+                            if (minCommandByteOffsets.TryGetValue(id, out minCommandByteOffset))
+                            {
+                                if (destinations.TryGetFirstValue(id, out command, out iterator))
+                                {
+                                    do
+                                    {
+                                        if(minCommandByteOffset > command.bufferSegment.byteOffset)
+                                            destinations.Remove(iterator);
+                                        
+                                    } while (destinations.TryGetNextValue(out command, ref iterator));
+                                }
+                            }
+                        }
                     }
                 }
+
+                minCommandByteOffsets.Clear();
 
                 if (!initCommands.IsEmpty)
                 {
