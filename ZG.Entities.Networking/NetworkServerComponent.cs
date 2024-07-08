@@ -1,9 +1,7 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using Unity.Entities;
 using Unity.Collections;
-using Unity.Mathematics;
 using Unity.Networking.Transport;
 using Unity.Networking.Transport.Error;
 using UnityEngine;
@@ -25,7 +23,7 @@ namespace ZG
             out int layerMask,
             out float visibilityDistance);
 
-        bool Unregister(uint id, in NetworkConnection connection, NetworkReader reader);
+        bool Unregister(uint id, in NetworkConnection connection, NetworkReader reader, NetworkIdentityComponent identity);
 
         bool Init(bool isNew, uint sourceID, uint destinationID, ref NetworkWriter writer);
 
@@ -722,14 +720,23 @@ namespace ZG
                 __wrapper.SendUnregisterMessage(ref writer, id);
         }
 
-        private bool __Unregister(uint id, in NetworkConnection connection, NetworkReader reader)
+        private bool __Unregister(
+            uint id, 
+            in NetworkConnection connection, 
+            NetworkReader reader, 
+            NetworkIdentityComponent identity)
         {
-            return __wrapper != null && __wrapper.Unregister(id, connection, reader);
+            return __wrapper != null && __wrapper.Unregister(id, connection, reader, identity);
         }
 
-        private bool __Unregister(int channel, uint id, in NetworkConnection connection, NetworkReader reader)
+        private bool __Unregister(
+            int channel, 
+            uint id, 
+            in NetworkConnection connection, 
+            NetworkReader reader)
         {
-            if (__identities != null && __identities.TryGetValue(id, out var identity))
+            var identity = GetIdentity(id);
+            if ((object)identity != null)
             {
                 int type = identity.type;
 
@@ -742,7 +749,7 @@ namespace ZG
                 }
 
                 var commander = this.commander;
-                if (__Unregister(id, connection, reader))
+                if (__Unregister(id, connection, reader, identity))
                 {
                     if(identity != null)
                         identity._host = null;

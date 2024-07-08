@@ -71,8 +71,8 @@ namespace ZG
 
                     return messageType;
                 }
-                else
-                    identity = 0;
+                
+                identity = 0;
 
                 stream = default;
 
@@ -260,6 +260,7 @@ namespace ZG
 #endif
 
                                             int length = (int)stream.ReadPackedUInt(model);
+                                            //UnityEngine.Debug.LogError($"Revice {length} : {buffer.position}");
                                             writer.Write(length);
 
                                             var block = writer.WriteBlock(length, false);

@@ -2340,205 +2340,6 @@ namespace ZG
             }
         }
 
-        /*[BurstCompile]
-        private struct CommandInit : IJobParallelFor
-        {
-            public StreamCompressionModel model;
-
-            public NetworkRPCManager<int>.ReadOnly manager;
-
-            public NetworkDriver.Concurrent driver;
-
-            [ReadOnly]
-            public NativeBuffer buffer;
-
-            [ReadOnly, DeallocateOnJobCompletion]
-            public NativeArray<uint> ids;
-
-            [ReadOnly]
-            public NativeParallelMultiHashMap<uint, InitCommand> initCommands;
-            
-            [ReadOnly]
-            public NativeParallelMultiHashMap<uint, InitEvent> initEvents;
-
-            public void Execute(int index)
-            {
-                uint id = ids[index];
-                var connection = manager.GetConnection(id);
-
-                if (connection.IsCreated && initCommands.TryGetFirstValue(id, out var initCommand, out var iterator))
-                {
-                    RPCMessage message;
-                    message.model = model;
-                    message.maskIDs = default;
-
-                    var pipeline = manager.GetPipeline(id);
-
-                    int result;
-                    StatusCode statusCode;
-                    DataStreamWriter writer = default;
-                    do
-                    {
-                        foreach (var initEvent in initEvents.GetValuesForKey(id))
-                        {
-                            if (initEvent.id == initCommand.id && initEvent.type == initCommand.type)
-                            {
-                                message.bytes = initCommand.bufferSegment.GetArray(buffer);
-                                if (writer.IsCreated && writer.Capacity - writer.Length < message.size)
-                                {
-                                    result = driver.EndSend(writer);
-                                    if (result < 0)
-                                    {
-                                        statusCode = (StatusCode)result;
-
-                                        if (StatusCode.Success != statusCode)
-                                            __LogError(statusCode);
-                                    }
-
-                                    writer = default;
-                                }
-
-                                if (!writer.IsCreated)
-                                {
-                                    statusCode = (StatusCode)driver.BeginSend(pipeline, connection, out writer);
-                                    if (StatusCode.Success != statusCode)
-                                    {
-                                        __LogError(statusCode);
-
-                                        return;
-                                    }
-                                }
-
-                                message.Send(ref writer, initCommand.id, id);
-
-                                break;
-                            }
-                        }
-                    } while (initCommands.TryGetNextValue(out initCommand, ref iterator));
-
-                    if (writer.IsCreated)
-                    {
-                        result = driver.EndSend(writer);
-                        if (result < 0)
-                        {
-                            statusCode = (StatusCode)result;
-
-                            if (StatusCode.Success != statusCode)
-                                __LogError(statusCode);
-                        }
-                    }
-                }
-
-            }
-
-            private void __LogError(StatusCode statusCode)
-            {
-                UnityEngine.Debug.LogError($"Init Command: {(int)statusCode}");
-            }
-        }
-
-        [BurstCompile]
-        private struct CommandRPC : IJobParallelForDefer
-        {
-            public StreamCompressionModel model;
-
-            public NetworkRPCManager<int>.ReadOnly manager;
-
-            public NetworkDriver.Concurrent driver;
-
-            [ReadOnly]
-            public NativeBuffer buffer;
-
-            [ReadOnly]
-            public NativeArray<uint> rpcIDs;
-
-            [ReadOnly]
-            public NativeParallelMultiHashMap<uint, RPCCommand> commands;
-
-            public void Execute(int index)
-            {
-                NativeArray<RPCCommand> commands = default;
-                int commandIndex = 0;
-                var id = rpcIDs[index];
-                foreach (var command in this.commands.GetValuesForKey(id))
-                {
-                    if(!commands.IsCreated)
-                        commands = new NativeArray<RPCCommand>(this.commands.CountValuesForKey(id), Allocator.Temp, NativeArrayOptions.UninitializedMemory);
-
-                    commands[commandIndex++] = command;
-                }
-
-                if (commands.IsCreated)
-                {
-                    commands.Sort();
-
-                    int result;
-                    StatusCode statusCode;
-                    RPCMessage message;
-                    NetworkPipeline pipeline = NetworkPipeline.Null;
-                    DataStreamWriter writer = default;
-                    var connection = manager.GetConnection(id);
-                    foreach (var command in commands)
-                    {
-                        message.maskIDs = command.maskIDs.GetArray<uint>(buffer);
-                        message.bytes = command.bufferSegment.GetArray(buffer);
-                        message.model = model;
-
-                        if (message.IsVail(id))
-                        {
-                            if (writer.IsCreated && (writer.Capacity - writer.Length < message.size || pipeline != command.pipeline))
-                            {
-                                result = driver.EndSend(writer);
-                                if (result < 0)
-                                {
-                                    statusCode = (StatusCode)result;
-
-                                    if (StatusCode.Success != statusCode)
-                                        __LogError(statusCode);
-                                }
-
-                                writer = default;
-                            }
-
-                            if (!writer.IsCreated)
-                            {
-                                pipeline = command.pipeline;
-
-                                statusCode = (StatusCode)driver.BeginSend(pipeline, connection, out writer);
-                                if (StatusCode.Success != statusCode)
-                                {
-                                    __LogError(statusCode);
-
-                                    continue;
-                                }
-                            }
-
-                            message.Send(ref writer, command.id, id);
-                        }
-                    }
-
-                    commands.Dispose();
-
-                    if (writer.IsCreated)
-                    {
-                        result = driver.EndSend(writer);
-                        if (result < 0)
-                        {
-                            statusCode = (StatusCode)result;
-
-                            if (StatusCode.Success != statusCode)
-                                __LogError(statusCode);
-                        }
-                    }
-                }
-            }
-
-            private void __LogError(StatusCode statusCode)
-            {
-                UnityEngine.Debug.LogError($"RPC Command: {(int)statusCode}");
-            }
-        }*/
-
         [BurstCompile]
         private struct CommandParallel : IJobParallelForDefer
         {
@@ -2977,6 +2778,8 @@ namespace ZG
                     DataStreamWriter writer = default;
                     foreach (var command in commands)
                     {
+                        //Debug.LogError($"Send Rpc {command.bufferSegment.byteOffset} : {command.bufferSegment.length}");
+
                         message.type = command.type;
                         message.model = model;
                         message.maskIDs = command.maskIDs.GetArray<uint, NativeBuffer>(buffer);
@@ -3336,6 +3139,8 @@ namespace ZG
                 command.maskIDs = default;
 
             __sourceRPCCommands.Add(command);
+            
+            //Debug.LogError($"Rpc {command.bufferSegment.byteOffset}");
 
             return command.bufferSegment.length + SizeOfCommandHeader;
         }
