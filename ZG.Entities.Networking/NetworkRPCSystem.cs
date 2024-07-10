@@ -528,7 +528,7 @@ namespace ZG
                                         __LogRegisterError(statusCode);
 
                                         message.Dispose(nodeIdentity.value, id);
-                                        while (__nodeIdentities.TryGetNextValue(out nodeIdentity, ref iterator));
+                                        while (__nodeIdentities.TryGetNextValue(out nodeIdentity, ref iterator))
                                         {
                                             if ((layerMask & (1 << nodeIdentity.layer)) != 0)
                                                 message.Dispose(nodeIdentity.value, id);
@@ -856,7 +856,7 @@ namespace ZG
                                             __LogRegisterError(statusCode);
 
                                             registerMessage.Dispose(nodeIdentity.value, id);
-                                            while (__nodeIdentities.TryGetNextValue(out nodeIdentity, ref nodeIterator));
+                                            while (__nodeIdentities.TryGetNextValue(out nodeIdentity, ref nodeIterator))
                                             {
                                                 if ((layerMask & (1 << nodeIdentity.layer)) != 0)
                                                     registerMessage.Dispose(nodeIdentity.value, id);
@@ -1357,16 +1357,17 @@ namespace ZG
                     versions, 
                     sourceID, 
                     destinationID, 
-                    out var iterator, 
+                    out var iterator
 #if DEBUG
-                    out version.isActive
+                    , out version.isActive
 #endif
                 ) + 1;
                 
+#if DEBUG
                 UnityEngine.Assertions.Assert.IsFalse(version.isActive);
-
+                
                 version.isActive = true;
-
+#endif
                 if (version.value == 1)
                     versions.Add(destinationID, version);
                 else
