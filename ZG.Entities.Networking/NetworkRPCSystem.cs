@@ -26,6 +26,8 @@ namespace ZG
         bool IsVail(uint id);
 
         void Send(ref DataStreamWriter writer, uint sourceID, uint destinationID);
+        
+        void Dispose(uint sourceID, uint destinationID);
     }
 
     public interface INetworkRPCDriver
@@ -361,8 +363,7 @@ namespace ZG
                                         {
                                             statusCode = (StatusCode)result;
 
-                                            if (StatusCode.Success != statusCode)
-                                                __LogUnregisterError(statusCode);
+                                            __LogUnregisterError(statusCode);
                                         }
 
                                         unregisteredWriter = default;
@@ -370,7 +371,7 @@ namespace ZG
 
                                     if (!unregisteredWriter.IsCreated)
                                     {
-                                        statusCode = (StatusCode)driver.BeginSend(identity.pipeline, identity.connection, out unregisteredWriter);
+                                        statusCode = driver.BeginSend(identity.pipeline, identity.connection, out unregisteredWriter);
                                         if (StatusCode.Success != statusCode)
                                         {
                                             unregisteredWriter = default;
@@ -383,6 +384,8 @@ namespace ZG
 
                                     if(isUnregistered)
                                         unregisterMessage.Send(ref unregisteredWriter, nodeIdentity.value, id);
+                                    else
+                                        unregisterMessage.Dispose(nodeIdentity.value, id);
                                 }
 
                                 if (isRegistered)
@@ -394,8 +397,7 @@ namespace ZG
                                         {
                                             statusCode = (StatusCode)result;
 
-                                            if (StatusCode.Success != statusCode)
-                                                __LogRegisterError(statusCode);
+                                            __LogRegisterError(statusCode);
                                         }
 
                                         registeredWriter = default;
@@ -416,6 +418,8 @@ namespace ZG
 
                                     if (isRegistered)
                                         registerMessage.Send(ref registeredWriter, nodeIdentity.value, id);
+                                    else
+                                        registerMessage.Dispose(nodeIdentity.value, id);
                                 }
                             }
                         } while (__nodeIdentities.TryGetNextValue(out nodeIdentity, ref iterator));
@@ -510,8 +514,7 @@ namespace ZG
                                     {
                                         statusCode = (StatusCode)result;
 
-                                        if (StatusCode.Success != statusCode)
-                                            __LogRegisterError(statusCode);
+                                        __LogRegisterError(statusCode);
                                     }
 
                                     writer = default;
@@ -519,10 +522,17 @@ namespace ZG
 
                                 if (!writer.IsCreated)
                                 {
-                                    statusCode = (StatusCode)driver.BeginSend(pipeline, connection, out writer);
+                                    statusCode = driver.BeginSend(pipeline, connection, out writer);
                                     if (StatusCode.Success != statusCode)
                                     {
                                         __LogRegisterError(statusCode);
+
+                                        message.Dispose(nodeIdentity.value, id);
+                                        while (__nodeIdentities.TryGetNextValue(out nodeIdentity, ref iterator));
+                                        {
+                                            if ((layerMask & (1 << nodeIdentity.layer)) != 0)
+                                                message.Dispose(nodeIdentity.value, id);
+                                        }
 
                                         break;
                                     }
@@ -613,6 +623,13 @@ namespace ZG
                                             writer = default;
 
                                             __LogUnregisterError(statusCode);
+
+                                            message.Dispose(nodeIdentity.value, id);
+                                            while (__nodeIdentities.TryGetNextValue(out nodeIdentity, ref nodeIterator))
+                                            {
+                                                if ((identity.layerMask & (1 << nodeIdentity.layer)) != 0)
+                                                    message.Dispose(nodeIdentity.value, id);
+                                            }
 
                                             break;
                                         }
@@ -745,6 +762,13 @@ namespace ZG
 
                                             __LogUnregisterError(statusCode);
 
+                                            unregisterMessage.Dispose(nodeIdentity.value, id);
+                                            while (__nodeIdentities.TryGetNextValue(out nodeIdentity, ref nodeIterator))
+                                            {
+                                                if ((identity.layerMask & (1 << nodeIdentity.layer)) != 0)
+                                                    unregisterMessage.Dispose(nodeIdentity.value, id);
+                                            }
+                                            
                                             break;
                                         }
                                     }
@@ -804,7 +828,6 @@ namespace ZG
                             {
                                 if ((layerMask & (1 << nodeIdentity.layer)) != 0)
                                 {
-
                                     if (writer.IsCreated && writer.Capacity - writer.Length < messageSize)
                                     {
                                         result = driver.EndSend(writer);
@@ -821,7 +844,7 @@ namespace ZG
 
                                     if (!writer.IsCreated)
                                     {
-                                        statusCode = (StatusCode)driver.BeginSend(identity.pipeline, identity.connection, out writer);
+                                        statusCode = driver.BeginSend(identity.pipeline, identity.connection, out writer);
                                         if (StatusCode.Success != statusCode)
                                         {
                                             isConnected = false;
@@ -832,6 +855,12 @@ namespace ZG
 
                                             __LogRegisterError(statusCode);
 
+                                            registerMessage.Dispose(nodeIdentity.value, id);
+                                            while (__nodeIdentities.TryGetNextValue(out nodeIdentity, ref nodeIterator));
+                                            {
+                                                if ((layerMask & (1 << nodeIdentity.layer)) != 0)
+                                                    registerMessage.Dispose(nodeIdentity.value, id);
+                                            }
                                             break;
                                         }
                                     }
@@ -880,7 +909,7 @@ namespace ZG
                     __identities.TryGetValue(removeID, out targetIdentity) &&
                     targetIdentity.connection.IsCreated)
                 {
-                    statusCode = (StatusCode)driver.BeginSend(targetIdentity.pipeline, targetIdentity.connection, out writer);
+                    statusCode = driver.BeginSend(targetIdentity.pipeline, targetIdentity.connection, out writer);
                     if (StatusCode.Success == statusCode)
                     {
                         unregisterMessage.Send(ref writer, id, removeID);
@@ -889,9 +918,11 @@ namespace ZG
                         if (result < 0)
                             statusCode = (StatusCode)result;
                     }
+                    else
+                        unregisterMessage.Dispose(id, removeID);
 
                     if (StatusCode.Success != statusCode)
-                        UnityEngine.Debug.LogError($"[Move]Unregister {id} for {removeID}: {statusCode}");
+                        Debug.LogError($"[Move]Unregister {id} for {removeID}: {statusCode}");
                 }
             }
 
@@ -901,7 +932,7 @@ namespace ZG
                     __identities.TryGetValue(addID, out targetIdentity) &&
                     targetIdentity.connection.IsCreated)
                 {
-                    statusCode = (StatusCode)driver.BeginSend(targetIdentity.pipeline, targetIdentity.connection, out writer);
+                    statusCode = driver.BeginSend(targetIdentity.pipeline, targetIdentity.connection, out writer);
                     if (StatusCode.Success == statusCode)
                     {
                         registerMessage.Send(ref writer, id, addID);
@@ -910,9 +941,11 @@ namespace ZG
                         if (result < 0)
                             statusCode = (StatusCode)result;
                     }
+                    else
+                        registerMessage.Dispose(id, addID);
 
                     if (StatusCode.Success != statusCode)
-                        UnityEngine.Debug.LogError($"[Move]Register {id} for {addID}: {statusCode}");
+                        Debug.LogError($"[Move]Register {id} for {addID}: {statusCode}");
                 }
             }
 
@@ -963,6 +996,8 @@ namespace ZG
                             if (result < 0)
                                 statusCode = (StatusCode)result;
                         }
+                        else
+                            message.Dispose(id, nodeID);
 
                         if (StatusCode.Success != statusCode)
                             __LogRPCError(id, nodeID, statusCode);
@@ -1235,6 +1270,29 @@ namespace ZG
 
                 writer.WriteBytes(bytes);
             }
+            
+            public void Dispose(uint sourceID, uint destinationID)
+            {
+                if (type < 0)
+                {
+                    uint version = Version.Get(
+                        versions,
+                        sourceID,
+                        destinationID,
+                        out _
+#if DEBUG
+                        , out bool isActive
+#endif
+                    );
+
+#if DEBUG
+                    if (!isActive)
+                        Debug.LogError($"{sourceID} RPC to {destinationID} with a inactive message.");
+#endif
+
+                    UnityEngine.Assertions.Assert.AreNotEqual(0, version);
+                }
+            }
         }
 
         private struct RegisterMessage : INetworkRPCMessage
@@ -1289,6 +1347,31 @@ namespace ZG
                 writer.WritePackedUInt((uint)bytes.Length, model);
                 writer.WriteBytes(bytes);
             }
+            
+            public void Dispose(uint sourceID, uint destinationID)
+            {
+                Version version;
+                version.id = sourceID;
+
+                version.value = Version.Get(
+                    versions, 
+                    sourceID, 
+                    destinationID, 
+                    out var iterator, 
+#if DEBUG
+                    out version.isActive
+#endif
+                ) + 1;
+                
+                UnityEngine.Assertions.Assert.IsFalse(version.isActive);
+
+                version.isActive = true;
+
+                if (version.value == 1)
+                    versions.Add(destinationID, version);
+                else
+                    versions.SetValue(version, iterator);
+            }
         }
 
         private struct UnregisterMessage : INetworkRPCMessage
@@ -1333,6 +1416,31 @@ namespace ZG
                 writer.WritePackedUInt(sourceID, model);
                 writer.WritePackedUInt((uint)bytes.Length, model);
                 writer.WriteBytes(bytes);
+            }
+            
+            
+            public void Dispose(uint sourceID, uint destinationID)
+            {
+#if DEBUG
+                //Debug.Log($"Unregister {sourceID} To {destinationID}");
+
+                Version version;
+                version.id = sourceID;
+
+                version.value = Version.Get(
+                    versions,
+                    sourceID,
+                    destinationID,
+                    out var iterator, 
+                    out bool isActive);
+
+                UnityEngine.Assertions.Assert.AreNotEqual(0, version.value);
+                UnityEngine.Assertions.Assert.IsTrue(isActive);
+
+                version.isActive = false;
+
+                versions.SetValue(version, iterator);
+#endif
             }
         }
 
@@ -2742,6 +2850,8 @@ namespace ZG
                                     {
                                         __LogError(statusCode);
 
+                                        message.Dispose(initCommand.id, id);
+
                                         return;
                                     }
                                 }
@@ -2843,6 +2953,8 @@ namespace ZG
                                     writers.Remove(pipeline);
 
                                     __LogError(statusCode);
+                                    
+                                    message.Dispose(command.id, id);
 
                                     continue;
                                 }
