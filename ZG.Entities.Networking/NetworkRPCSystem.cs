@@ -1419,10 +1419,10 @@ namespace ZG
                 UnityEngine.Assertions.Assert.AreNotEqual(0, version.value);
                 //UnityEngine.Assertions.Assert.IsTrue(isActive);
                 
-                Debug.Log($"[RPC]Register {sourceID} To {destinationID}.");
+                Debug.Log($"[RPC]Unregister {sourceID} To {destinationID}.");
                 
-                if (isActive)
-                    Debug.LogError($"[RPC]Register {sourceID} To {destinationID} with an active version.");
+                if (!isActive)
+                    Debug.LogError($"[RPC]Unregister {sourceID} To {destinationID} with an active version.");
 
                 version.isActive = false;
 
