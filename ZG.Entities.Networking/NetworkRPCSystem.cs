@@ -336,8 +336,8 @@ namespace ZG
             if (identity.connection == connection)
                 return true;
 
-            bool isRegisteredOrigin = NetworkConnection.State.Connected == driver.GetConnectionState(connection) && registerMessage.IsVail(id), 
-                isUnregisteredOrigin = NetworkConnection.State.Connected == driver.GetConnectionState(identity.connection) && unregisterMessage.IsVail(id);
+            bool isRegisteredOrigin = connection.IsCreated/*NetworkConnection.State.Connected == driver.GetConnectionState(connection)*/ && registerMessage.IsVail(id), 
+                isUnregisteredOrigin = identity.connection.IsCreated/*NetworkConnection.State.Connected == driver.GetConnectionState(identity.connection)*/ && unregisterMessage.IsVail(id);
             if ((isRegisteredOrigin || isUnregisteredOrigin) && 
                 __idNodes.TryGetFirstValue(id, out T node, out var idNodeIterator))
             {
@@ -696,6 +696,8 @@ namespace ZG
         {
             if (!__GetIdentity(id, out int layer, out var identity, out var nodeIterator))
                 return false;
+            
+            Debug.Log($"Move {id} From {identity.node} To {node}");
 
             __nodeIdentities.Remove(nodeIterator);
 
@@ -706,8 +708,7 @@ namespace ZG
             {
                 do
                 {
-                    if (__identities.TryGetValue(targetID, out targetIdentity) && 
-                        (targetIdentity.layerMask & (1 << layer)) != 0)
+                    if (__identities.TryGetValue(targetID, out targetIdentity) && (targetIdentity.layerMask & (1 << layer)) != 0)
                             removeIDs.Add(targetID);
 
                 } while (__nodeIDs.TryGetNextValue(out targetID, ref nodeIterator));
@@ -883,7 +884,7 @@ namespace ZG
                 {
                     statusCode = (StatusCode)result;
 
-                    UnityEngine.Debug.LogError($"[Move]{statusCode}");
+                    Debug.LogError($"[Move]{statusCode}");
                 }
             }
 
@@ -1098,7 +1099,7 @@ namespace ZG
                 where TValue : struct
                 where TBuffer : IUnsafeBuffer
             {
-                return buffer.AsArray<TValue>(byteOffset, length);
+                return length < 0 ? default : buffer.AsArray<TValue>(byteOffset, length);
             }
 
             public NativeArray<byte> GetArray<T>(in T buffer) where T : IUnsafeBuffer
@@ -1308,9 +1309,9 @@ namespace ZG
             public NativeArray<byte> bytes;
             public NativeParallelMultiHashMap<uint, Version> versions;
 
-            public int size => (UnsafeUtility.SizeOf<uint>() * 5) + bytes.Length;
+            public int size => bytes.Length  + UnsafeUtility.SizeOf<uint>() * 5;
 
-            public bool IsVail(uint id) => true;
+            public bool IsVail(uint id) => bytes.IsCreated;
 
             public void Send(ref DataStreamWriter writer, uint sourceID, uint destinationID)
             {
@@ -1397,9 +1398,9 @@ namespace ZG
             public NativeParallelMultiHashMap<uint, Version> versions;
 #endif
 
-            public int size => (UnsafeUtility.SizeOf<uint>() * 3) + bytes.Length;
+            public int size => bytes.Length + UnsafeUtility.SizeOf<uint>() * 3;
 
-            public bool IsVail(uint id) => true;
+            public bool IsVail(uint id) => bytes.IsCreated;
 
             public void Send(ref DataStreamWriter writer, uint sourceID, uint destinationID)
             {
@@ -1984,7 +1985,7 @@ namespace ZG
 
                             unregisterMessage.bytes = unregisterCommand.bufferSegment.GetArray(buffer);
 
-#if DEBUG
+/*#if DEBUG
                             if (nodeIDs.IsCreated)
                                 nodeIDs.Clear();
 
@@ -2005,7 +2006,7 @@ namespace ZG
                                     }
                                 }
                             }
-#endif
+#endif*/
                             if (manager.Unregister(
                                 id,
                                 ref driver,
@@ -2013,7 +2014,7 @@ namespace ZG
                             {
                                 types.Remove(id);
 
-#if DEBUG
+/*#if DEBUG
                                 foreach(var nodeID in nodeIDs)
                                 {
                                     Version version;
@@ -2033,7 +2034,7 @@ namespace ZG
                                         versions.SetValue(version, iterator);
                                     }
                                 }
-#endif
+#endif*/
                             }
 
                             break;
@@ -2220,7 +2221,7 @@ namespace ZG
                 if (removeIDs.IsCreated)
                     removeIDs.Dispose();*/
 
-                NetworkConnection connection;
+                //NetworkConnection connection;
                 ReconnectCommand reconnectCommand;
                 foreach (var pair in reconnectCommands)
                 {
@@ -2231,8 +2232,8 @@ namespace ZG
                     registerMessage.bytes = reconnectCommand.registerBufferSegment.GetArray(buffer);
                     unregisterMessage.bytes = reconnectCommand.unregisterBufferSegment.GetArray(buffer);
                      
+/*#if DEBUG
                     connection = manager.GetConnection(id);
-#if DEBUG
                     if ((NetworkConnection.State.Connected != driver.GetConnectionState(connection) || !unregisterMessage.IsVail(id)) &&
                         (NetworkConnection.State.Connected == driver.GetConnectionState(reconnectCommand.connection) && registerMessage.IsVail(id)))
                     {
@@ -2266,7 +2267,7 @@ namespace ZG
                             }
                         }
                     }
-#endif
+#endif*/
 
                     if (manager.Reconnect(
                         id,
@@ -3421,7 +3422,7 @@ namespace ZG
             reconnectCommand.registerBufferSegment.length = registerMessageLength;
 
             reconnectCommand.unregisterBufferSegment.byteOffset = reconnectCommand.registerBufferSegment.byteOffset + reconnectCommand.registerBufferSegment.length;
-            reconnectCommand.unregisterBufferSegment.length = writer.Length - registerMessageLength;
+            reconnectCommand.unregisterBufferSegment.length = writer.Length - math.max(registerMessageLength, 0);
             
             __buffer.position = position;
 
@@ -3446,7 +3447,7 @@ namespace ZG
 
         public int EndCommandDisconnect(int type, DataStreamWriter writer)
         {
-            return EndCommandReconnect(0, type, default, writer);
+            return EndCommandReconnect(-1, type, default, writer);
         }
 
         public void AbortCommand(DataStreamWriter writer)
