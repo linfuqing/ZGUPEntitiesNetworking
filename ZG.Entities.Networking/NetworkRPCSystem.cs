@@ -336,11 +336,12 @@ namespace ZG
             if (identity.connection == connection)
                 return true;
 
-            bool isRegistered = NetworkConnection.State.Connected == driver.GetConnectionState(connection) && registerMessage.IsVail(id), 
-                isUnregistered = NetworkConnection.State.Connected == driver.GetConnectionState(identity.connection) && unregisterMessage.IsVail(id);
-            if ((isRegistered || isUnregistered) && 
+            bool isRegisteredOrigin = NetworkConnection.State.Connected == driver.GetConnectionState(connection) && registerMessage.IsVail(id), 
+                isUnregisteredOrigin = NetworkConnection.State.Connected == driver.GetConnectionState(identity.connection) && unregisterMessage.IsVail(id);
+            if ((isRegisteredOrigin || isUnregisteredOrigin) && 
                 __idNodes.TryGetFirstValue(id, out T node, out var idNodeIterator))
             {
+                bool isRegistered = isRegisteredOrigin, isUnregistered = isUnregisteredOrigin;
                 int unregisterMessageSize = unregisterMessage.size, registerMessageSize = registerMessage.size, result;
                 StatusCode statusCode;
                 NodeIdentity nodeIdentity;
@@ -387,7 +388,7 @@ namespace ZG
                                     else
                                         unregisterMessage.Dispose(nodeIdentity.value, id);
                                 }
-                                else
+                                else if(isUnregisteredOrigin)
                                     unregisterMessage.Dispose(nodeIdentity.value, id);
 
                                 if (isRegistered)
@@ -407,7 +408,7 @@ namespace ZG
 
                                     if (!registeredWriter.IsCreated)
                                     {
-                                        statusCode = (StatusCode)driver.BeginSend(identity.pipeline, connection, out registeredWriter);
+                                        statusCode = driver.BeginSend(identity.pipeline, connection, out registeredWriter);
                                         if (StatusCode.Success != statusCode)
                                         {
                                             registeredWriter = default;
@@ -423,7 +424,7 @@ namespace ZG
                                     else
                                         registerMessage.Dispose(nodeIdentity.value, id);
                                 }
-                                else
+                                else if(isRegisteredOrigin)
                                     registerMessage.Dispose(nodeIdentity.value, id);
                             }
                         } while (__nodeIdentities.TryGetNextValue(out nodeIdentity, ref iterator));
@@ -1256,7 +1257,7 @@ namespace ZG
 
 #if DEBUG
                     if (!isActive)
-                        Debug.LogError($"{sourceID} RPC to {destinationID} with a inactive message.");
+                        Debug.LogError($"[RPC]{sourceID} RPC to {destinationID} with a inactive message.");
 #endif
 
                     UnityEngine.Assertions.Assert.AreNotEqual(0, version);
@@ -1289,7 +1290,7 @@ namespace ZG
 
 #if DEBUG
                     if (!isActive)
-                        Debug.LogError($"{sourceID} RPC to {destinationID} with a inactive message.");
+                        Debug.LogError($"[RPC]{sourceID} RPC to {destinationID} with a inactive message.");
 #endif
 
                     UnityEngine.Assertions.Assert.AreNotEqual(0, version);
@@ -1331,10 +1332,10 @@ namespace ZG
                 writer.WritePackedUInt(version.value, model);
 
 #if DEBUG
-                Debug.Log($"Register {sourceID} To {destinationID}");
+                Debug.Log($"[RPC]Register {sourceID} To {destinationID}");
 
                 if (version.isActive)
-                    Debug.LogError($"Register {sourceID} To {destinationID} with an active version.");
+                    Debug.LogError($"[RPC]Register {sourceID} To {destinationID} with an active version.");
                 
                 //UnityEngine.Assertions.Assert.IsFalse(version.isActive);
 
@@ -1369,10 +1370,10 @@ namespace ZG
                 ) + 1;
                 
 #if DEBUG
-                Debug.Log($"Register {sourceID} To {destinationID}.");
+                Debug.Log($"[RPC]Register {sourceID} To {destinationID}.");
 
                 if (version.isActive)
-                    Debug.LogError($"Register {sourceID} To {destinationID} with an active version.");
+                    Debug.LogError($"[RPC]Register {sourceID} To {destinationID} with an active version.");
 
                 //UnityEngine.Assertions.Assert.IsFalse(version.isActive);
                 
@@ -1418,10 +1419,10 @@ namespace ZG
                 UnityEngine.Assertions.Assert.AreNotEqual(0, version.value);
                 //UnityEngine.Assertions.Assert.IsTrue(isActive);
                 
-                Debug.Log($"Register {sourceID} To {destinationID}.");
+                Debug.Log($"[RPC]Register {sourceID} To {destinationID}.");
                 
                 if (isActive)
-                    Debug.LogError($"Register {sourceID} To {destinationID} with an active version.");
+                    Debug.LogError($"[RPC]Register {sourceID} To {destinationID} with an active version.");
 
                 version.isActive = false;
 
@@ -1450,10 +1451,10 @@ namespace ZG
                     out var iterator, 
                     out bool isActive);
                 
-                Debug.Log($"Unregister {sourceID} To {destinationID}.");
+                Debug.Log($"[RPC]Unregister {sourceID} To {destinationID}.");
                 
                 if(!isActive)
-                    Debug.LogError($"Unregister {sourceID} To {destinationID} with an inactive version.");
+                    Debug.LogError($"[RPC]Unregister {sourceID} To {destinationID} with an inactive version.");
                 
                 UnityEngine.Assertions.Assert.AreNotEqual(0, version.value);
                 //UnityEngine.Assertions.Assert.IsTrue(isActive);
