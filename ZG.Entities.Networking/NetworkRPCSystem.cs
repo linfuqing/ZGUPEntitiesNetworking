@@ -387,6 +387,8 @@ namespace ZG
                                     else
                                         unregisterMessage.Dispose(nodeIdentity.value, id);
                                 }
+                                else
+                                    unregisterMessage.Dispose(nodeIdentity.value, id);
 
                                 if (isRegistered)
                                 {
@@ -421,6 +423,8 @@ namespace ZG
                                     else
                                         registerMessage.Dispose(nodeIdentity.value, id);
                                 }
+                                else
+                                    registerMessage.Dispose(nodeIdentity.value, id);
                             }
                         } while (__nodeIdentities.TryGetNextValue(out nodeIdentity, ref iterator));
                     }
@@ -434,8 +438,7 @@ namespace ZG
                     {
                         statusCode = (StatusCode)result;
 
-                        if (StatusCode.Success != statusCode)
-                            __LogUnregisterError(statusCode);
+                        __LogUnregisterError(statusCode);
                     }
                 }
 
@@ -446,8 +449,7 @@ namespace ZG
                     {
                         statusCode = (StatusCode)result;
 
-                        if (StatusCode.Success != statusCode)
-                            __LogRegisterError(statusCode);
+                        __LogRegisterError(statusCode);
                     }
                 }
             }
@@ -1329,9 +1331,12 @@ namespace ZG
                 writer.WritePackedUInt(version.value, model);
 
 #if DEBUG
-                //Debug.Log($"Register {sourceID} To {destinationID}");
+                Debug.Log($"Register {sourceID} To {destinationID}");
 
-                UnityEngine.Assertions.Assert.IsFalse(version.isActive);
+                if (version.isActive)
+                    Debug.LogError($"Register {sourceID} To {destinationID} with an active version.");
+                
+                //UnityEngine.Assertions.Assert.IsFalse(version.isActive);
 
                 version.isActive = true;
 #endif
@@ -1364,7 +1369,12 @@ namespace ZG
                 ) + 1;
                 
 #if DEBUG
-                UnityEngine.Assertions.Assert.IsFalse(version.isActive);
+                Debug.Log($"Register {sourceID} To {destinationID}.");
+
+                if (version.isActive)
+                    Debug.LogError($"Register {sourceID} To {destinationID} with an active version.");
+
+                //UnityEngine.Assertions.Assert.IsFalse(version.isActive);
                 
                 version.isActive = true;
 #endif
@@ -1406,7 +1416,12 @@ namespace ZG
                     out bool isActive);
 
                 UnityEngine.Assertions.Assert.AreNotEqual(0, version.value);
-                UnityEngine.Assertions.Assert.IsTrue(isActive);
+                //UnityEngine.Assertions.Assert.IsTrue(isActive);
+                
+                Debug.Log($"Register {sourceID} To {destinationID}.");
+                
+                if (isActive)
+                    Debug.LogError($"Register {sourceID} To {destinationID} with an active version.");
 
                 version.isActive = false;
 
@@ -1434,9 +1449,14 @@ namespace ZG
                     destinationID,
                     out var iterator, 
                     out bool isActive);
-
+                
+                Debug.Log($"Unregister {sourceID} To {destinationID}.");
+                
+                if(!isActive)
+                    Debug.LogError($"Unregister {sourceID} To {destinationID} with an inactive version.");
+                
                 UnityEngine.Assertions.Assert.AreNotEqual(0, version.value);
-                UnityEngine.Assertions.Assert.IsTrue(isActive);
+                //UnityEngine.Assertions.Assert.IsTrue(isActive);
 
                 version.isActive = false;
 
