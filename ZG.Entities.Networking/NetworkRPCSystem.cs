@@ -336,6 +336,8 @@ namespace ZG
             if (identity.connection == connection)
                 return true;
 
+            UnityEngine.Debug.Log($"[RPCCommand]{id} : {identity.node} : {identity.connection} : {connection}");
+
             bool isRegisteredOrigin = connection.IsCreated/*NetworkConnection.State.Connected == driver.GetConnectionState(connection)*/ && registerMessage.IsVail(id), 
                 isUnregisteredOrigin = identity.connection.IsCreated/*NetworkConnection.State.Connected == driver.GetConnectionState(identity.connection)*/ && unregisterMessage.IsVail(id);
             if ((isRegisteredOrigin || isUnregisteredOrigin) && 
@@ -485,6 +487,8 @@ namespace ZG
             identity.pipeline = pipeline;
             if (!__identities.TryAdd(id, identity))
                 return false;
+            
+            UnityEngine.Debug.Log($"[RPCCommand]{id} Register : {node} : {connection}");
 
             nodeDistances.Clear();
 
@@ -582,6 +586,8 @@ namespace ZG
         {
             if (!__GetIdentity(id, out int layer, out var identity, out var nodeIterator))
                 return false;
+
+            UnityEngine.Debug.Log($"[RPCCommand]{id} Unregister {identity.node} : {identity.connection}");
 
             __RPC(id, layer, identity.node, ref driver, NetworkPipeline.Null, message);
 
@@ -697,7 +703,7 @@ namespace ZG
             if (!__GetIdentity(id, out int layer, out var identity, out var nodeIterator))
                 return false;
             
-            //Debug.Log($"Move {id} From {identity.node} To {node}");
+            Debug.Log($"[RPCCommand]{id} Move From {identity.node} To {node} : {identity.connection}");
 
             __nodeIdentities.Remove(nodeIterator);
 
@@ -920,11 +926,13 @@ namespace ZG
                         if (result < 0)
                             statusCode = (StatusCode)result;
                     }
-                    else
-                        unregisterMessage.Dispose(id, removeID);
 
                     if (StatusCode.Success != statusCode)
+                    {
                         Debug.LogError($"[Move]Unregister {id} for {removeID}: {statusCode}");
+                        
+                        unregisterMessage.Dispose(id, removeID);
+                    }
                 }
             }
 
@@ -943,11 +951,13 @@ namespace ZG
                         if (result < 0)
                             statusCode = (StatusCode)result;
                     }
-                    else
-                        registerMessage.Dispose(id, addID);
 
                     if (StatusCode.Success != statusCode)
+                    {
                         Debug.LogError($"[Move]Register {id} for {addID}: {statusCode}");
+                        
+                        registerMessage.Dispose(id, addID);
+                    }
                 }
             }
 
@@ -1433,7 +1443,6 @@ namespace ZG
                 writer.WritePackedUInt((uint)bytes.Length, model);
                 writer.WriteBytes(bytes);
             }
-            
             
             public void Dispose(uint sourceID, uint destinationID)
             {
