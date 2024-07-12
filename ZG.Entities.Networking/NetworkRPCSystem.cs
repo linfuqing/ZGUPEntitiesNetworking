@@ -697,7 +697,7 @@ namespace ZG
             if (!__GetIdentity(id, out int layer, out var identity, out var nodeIterator))
                 return false;
             
-            Debug.Log($"Move {id} From {identity.node} To {node}");
+            //Debug.Log($"Move {id} From {identity.node} To {node}");
 
             __nodeIdentities.Remove(nodeIterator);
 
@@ -746,8 +746,7 @@ namespace ZG
                                         {
                                             statusCode = (StatusCode)result;
 
-                                            if (StatusCode.Success != statusCode)
-                                                __LogUnregisterError(statusCode);
+                                            __LogUnregisterError(statusCode);
                                         }
 
                                         writer = default;
@@ -758,7 +757,7 @@ namespace ZG
                                         statusCode = driver.BeginSend(identity.pipeline, identity.connection, out writer);
                                         if (StatusCode.Success != statusCode)
                                         {
-                                            isConnected = false;
+                                            //isConnected = false;
 
                                             isUnregistered = false;
 
@@ -839,8 +838,7 @@ namespace ZG
                                         {
                                             statusCode = (StatusCode)result;
 
-                                            if (StatusCode.Success != statusCode)
-                                                __LogRegisterError(statusCode);
+                                            __LogRegisterError(statusCode);
                                         }
 
                                         writer = default;
@@ -851,7 +849,7 @@ namespace ZG
                                         statusCode = driver.BeginSend(identity.pipeline, identity.connection, out writer);
                                         if (StatusCode.Success != statusCode)
                                         {
-                                            isConnected = false;
+                                            //isConnected = false;
 
                                             isRegistered = false;
 
@@ -2859,8 +2857,7 @@ namespace ZG
                                     {
                                         statusCode = (StatusCode)result;
 
-                                        if (StatusCode.Success != statusCode)
-                                            __LogError(statusCode);
+                                        __LogError(statusCode);
                                     }
 
                                     writer = default;
@@ -3393,7 +3390,7 @@ namespace ZG
             moveCommand.registerBufferSegment.length = registerMessageLength;
 
             moveCommand.unregisterBufferSegment.byteOffset = moveCommand.registerBufferSegment.byteOffset + moveCommand.registerBufferSegment.length;
-            moveCommand.unregisterBufferSegment.length = writer.Length - registerMessageLength;
+            moveCommand.unregisterBufferSegment.length = writer.Length - math.max(registerMessageLength, 0);
 
             __buffer.position = position;
 

@@ -487,9 +487,9 @@ namespace ZG
             var statusCode = (StatusCode)driver.BeginSend(pipeline, connection, out writer);
             if (statusCode == StatusCode.Success)
             {
-                writer.WritePackedUInt(messageType);
+                writer.WritePackedUInt(messageType, StreamCompressionModel.Default);
                 writer.WriteUShort(0);
-                writer.Flush();
+                //writer.Flush();
             }
 
             return statusCode;
