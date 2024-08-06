@@ -177,17 +177,17 @@ namespace ZG
         private NativeParallelHashMap<uint, Identity> __identities;
 
         /// <summary>
-        /// id��Ӧ�ɿ���������
+        /// id可见的区域
         /// </summary>
         private NativeParallelMultiHashMap<uint, T> __idNodes;
 
         /// <summary>
-        /// �ɿ����������id
+        ///可以看见该区域的id
         /// </summary>
         private NativeParallelMultiHashMap<T, uint> __nodeIDs;
 
         /// <summary>
-        /// ��������ڵ�Identity
+        /// 区域的所有Identity
         /// </summary>
         private NativeParallelMultiHashMap<T, NodeIdentity> __nodeIdentities;
 
@@ -269,7 +269,7 @@ namespace ZG
         }
 
         /// <summary>
-        /// id��Ӧ�ɿ���������
+        /// id可见的区域
         /// </summary>
         public NativeParallelMultiHashMap<uint, T>.Enumerator GetIDNodes(uint id)
         {
@@ -277,7 +277,7 @@ namespace ZG
         }
 
         /// <summary>
-        /// �ɿ����������id
+        /// 可以看见该区域的id
         /// </summary>
         public NativeParallelMultiHashMap<T, uint>.Enumerator GetNodeIDs(in T value)
         {
@@ -285,7 +285,7 @@ namespace ZG
         }
 
         /// <summary>
-        /// ��������ڵ�Identity
+        /// 区域的所有Identity
         /// </summary>
         public NativeParallelMultiHashMap<T, NodeIdentity>.Enumerator GetNodeIdentities(in T value)
         {
@@ -336,7 +336,13 @@ namespace ZG
             if (identity.connection == connection)
                 return true;
 
-            UnityEngine.Debug.Log($"[RPCCommand]{id} : {identity.node} : {identity.connection} : {connection}");
+            /*string hehe = "hehe";
+            foreach (var value in __idNodes.GetValuesForKey(id))
+            {
+                hehe += $" {value}";
+            }
+
+            UnityEngine.Debug.Log($"[RPCCommand]{id} Reconnect : {identity.node} : {identity.connection} : {connection} : {hehe}");*/
 
             bool isRegisteredOrigin = connection.IsCreated/*NetworkConnection.State.Connected == driver.GetConnectionState(connection)*/ && registerMessage.IsVail(id), 
                 isUnregisteredOrigin = identity.connection.IsCreated/*NetworkConnection.State.Connected == driver.GetConnectionState(identity.connection)*/ && unregisterMessage.IsVail(id);
@@ -357,6 +363,8 @@ namespace ZG
                         {
                             if ((identity.layerMask & (1 << nodeIdentity.layer)) != 0)
                             {
+                                //Debug.Log($"[RPC]Unregister {nodeIdentity.value} To {id} In {node}");
+
                                 if (isUnregistered)
                                 {
                                     if (unregisteredWriter.IsCreated && unregisteredWriter.Capacity - unregisteredWriter.Length < unregisterMessageSize)
@@ -384,7 +392,7 @@ namespace ZG
                                             isUnregistered = false;
                                         }
                                     }
-
+                                    
                                     if(isUnregistered)
                                         unregisterMessage.Send(ref unregisteredWriter, nodeIdentity.value, id);
                                     else
@@ -392,6 +400,8 @@ namespace ZG
                                 }
                                 else if(isUnregisteredOrigin)
                                     unregisterMessage.Dispose(nodeIdentity.value, id);
+
+                                //Debug.Log($"[RPC]Register {nodeIdentity.value} To {id} In {node}");
 
                                 if (isRegistered)
                                 {
@@ -488,13 +498,24 @@ namespace ZG
             if (!__identities.TryAdd(id, identity))
                 return false;
             
-            UnityEngine.Debug.Log($"[RPCCommand]{id} Register : {node} : {connection}");
-
             nodeDistances.Clear();
 
             graph.Visit(node, visibilityDistance, ref nodeDistances);
 
-            bool isSend = identity.connection.IsCreated/*NetworkConnection.State.Connected == driver.GetConnectionState(identity.connection)*/ && message.IsVail(id);
+            /*string hehe = "hehe";
+            if (__nodeIDs.TryGetFirstValue(node, out var nodeID, out var titerator))
+            {
+                do
+                {
+                    bool t = __identities.TryGetValue(nodeID, out var tidentity), b = (tidentity.layerMask & (1 << layer)) != 0;
+                    hehe += $":{nodeID}-{t}-{b}-{message.IsVail(nodeID)}-{identity.connection.IsCreated}";
+
+                } while (__nodeIDs.TryGetNextValue(out nodeID, ref titerator));
+            }
+
+            UnityEngine.Debug.Log($"[RPCCommand]{id} Register : {node} : {connection}{hehe}");*/
+
+            bool isConnected = identity.connection.IsCreated/*NetworkConnection.State.Connected == driver.GetConnectionState(identity.connection)*/ && message.IsVail(id);
             int messageSize = message.size, result;
             StatusCode statusCode;
             NodeIdentity nodeIdentity;
@@ -505,9 +526,8 @@ namespace ZG
             {
                 targetNode = nodeDistance.Key;
 
-                if (isSend)
+                if (isConnected)
                 {
-                    //�Լ��ܿ���������
                     if (__nodeIdentities.TryGetFirstValue(targetNode, out nodeIdentity, out iterator))
                     {
                         do
@@ -534,16 +554,24 @@ namespace ZG
                                     {
                                         __LogRegisterError(statusCode);
 
+                                        //Debug.Log($"[RPC]Register {nodeIdentity.value} To {id} In {node}");
+
                                         message.Dispose(nodeIdentity.value, id);
                                         while (__nodeIdentities.TryGetNextValue(out nodeIdentity, ref iterator))
                                         {
                                             if ((layerMask & (1 << nodeIdentity.layer)) != 0)
+                                            {
+                                                //Debug.Log($"[RPC]Register {nodeIdentity.value} To {id} In {node}");
+
                                                 message.Dispose(nodeIdentity.value, id);
+                                            }
                                         }
 
                                         break;
                                     }
                                 }
+
+                                //Debug.Log($"[RPC]Register {nodeIdentity.value} To {id} In {node}");
 
                                 message.Send(ref writer, nodeIdentity.value, id);
                             }
@@ -563,8 +591,7 @@ namespace ZG
                 {
                     statusCode = (StatusCode)result;
 
-                    if (StatusCode.Success != statusCode)
-                        __LogRegisterError(statusCode);
+                    __LogRegisterError(statusCode);
                 }
             }
 
@@ -587,7 +614,7 @@ namespace ZG
             if (!__GetIdentity(id, out int layer, out var identity, out var nodeIterator))
                 return false;
 
-            UnityEngine.Debug.Log($"[RPCCommand]{id} Unregister {identity.node} : {identity.connection}");
+            //UnityEngine.Debug.Log($"[RPCCommand]{id} Unregister {identity.node} : {identity.connection}");
 
             __RPC(id, layer, identity.node, ref driver, NetworkPipeline.Null, message);
 
@@ -633,16 +660,24 @@ namespace ZG
 
                                             __LogUnregisterError(statusCode);
 
+                                            //Debug.Log($"[RPC]Unregister {nodeIdentity.value} To {id} In {node}");
+
                                             message.Dispose(nodeIdentity.value, id);
                                             while (__nodeIdentities.TryGetNextValue(out nodeIdentity, ref nodeIterator))
                                             {
                                                 if ((identity.layerMask & (1 << nodeIdentity.layer)) != 0)
+                                                {
+                                                    //Debug.Log($"[RPC]Unregister {nodeIdentity.value} To {id} In {node}");
+
                                                     message.Dispose(nodeIdentity.value, id);
+                                                }
                                             }
 
                                             break;
                                         }
                                     }
+
+                                    //Debug.Log($"[RPC]Unregister {nodeIdentity.value} To {id} In {node}");
 
                                     message.Send(ref writer, nodeIdentity.value, id);
                                 }
@@ -703,8 +738,6 @@ namespace ZG
             if (!__GetIdentity(id, out int layer, out var identity, out var nodeIterator))
                 return false;
             
-            Debug.Log($"[RPCCommand]{id} Move From {identity.node} To {node} : {identity.connection}");
-
             __nodeIdentities.Remove(nodeIterator);
 
             removeIDs.Clear();
@@ -724,8 +757,17 @@ namespace ZG
 
             graph.Visit(node, visibilityDistance, ref nodeDistances);
 
+            /*string hehe = "hehe";
+            foreach (var nodeDistance in nodeDistances)
+            {
+                hehe += $" {nodeDistance.Key}";
+            }
+
+            Debug.Log($"[RPCCommand]{id} Move From {identity.node} To {node} : {identity.connection} : {hehe}");*/
+
             bool isConnected = identity.connection.IsCreated, //NetworkConnection.State.Connected == driver.GetConnectionState(identity.connection),
-                isUnregistered = isConnected && unregisterMessage.IsVail(id);
+                isUnregisteredOrigin = isConnected && unregisterMessage.IsVail(id), 
+                isUnregistered = isUnregisteredOrigin;
             uint taretID;
             int messageSize, result;
             StatusCode statusCode;
@@ -739,50 +781,51 @@ namespace ZG
                 {
                     if(!nodeDistances.ContainsKey(sourceNode))
                     {
-                        if (isUnregistered && __nodeIdentities.TryGetFirstValue(sourceNode, out nodeIdentity, out nodeIterator))
+                        if (isUnregisteredOrigin &&
+                            __nodeIdentities.TryGetFirstValue(sourceNode, out nodeIdentity, out nodeIterator))
                         {
                             do
                             {
                                 if ((identity.layerMask & (1 << nodeIdentity.layer)) != 0)
                                 {
-                                    if (writer.IsCreated && writer.Capacity - writer.Length < messageSize)
+                                    if (isUnregistered)
                                     {
-                                        result = driver.EndSend(writer);
-                                        if (result < 0)
+                                        if (writer.IsCreated && writer.Capacity - writer.Length < messageSize)
                                         {
-                                            statusCode = (StatusCode)result;
+                                            result = driver.EndSend(writer);
+                                            if (result < 0)
+                                            {
+                                                statusCode = (StatusCode)result;
 
-                                            __LogUnregisterError(statusCode);
-                                        }
-
-                                        writer = default;
-                                    }
-
-                                    if (!writer.IsCreated)
-                                    {
-                                        statusCode = driver.BeginSend(identity.pipeline, identity.connection, out writer);
-                                        if (StatusCode.Success != statusCode)
-                                        {
-                                            //isConnected = false;
-
-                                            isUnregistered = false;
+                                                __LogUnregisterError(statusCode);
+                                            }
 
                                             writer = default;
+                                        }
 
-                                            __LogUnregisterError(statusCode);
-
-                                            unregisterMessage.Dispose(nodeIdentity.value, id);
-                                            while (__nodeIdentities.TryGetNextValue(out nodeIdentity, ref nodeIterator))
+                                        if (!writer.IsCreated)
+                                        {
+                                            statusCode = driver.BeginSend(identity.pipeline, identity.connection,
+                                                out writer);
+                                            if (StatusCode.Success != statusCode)
                                             {
-                                                if ((identity.layerMask & (1 << nodeIdentity.layer)) != 0)
-                                                    unregisterMessage.Dispose(nodeIdentity.value, id);
+                                                //isConnected = false;
+
+                                                isUnregistered = false;
+
+                                                writer = default;
+
+                                                __LogUnregisterError(statusCode);
                                             }
-                                            
-                                            break;
                                         }
                                     }
 
-                                    unregisterMessage.Send(ref writer, nodeIdentity.value, id);
+                                    //Debug.Log($"[RPC]Unregister {nodeIdentity.value} To {id} In {sourceNode}");
+
+                                    if (isUnregistered)
+                                        unregisterMessage.Send(ref writer, nodeIdentity.value, id);
+                                    else
+                                        unregisterMessage.Dispose(nodeIdentity.value, id);
                                 }
                             } while (__nodeIdentities.TryGetNextValue(out nodeIdentity, ref nodeIterator));
                         }
@@ -805,7 +848,9 @@ namespace ZG
 
             messageSize = registerMessage.size;
 
-            bool isRegistered = isConnected && registerMessage.IsVail(id), isContains;
+            bool isRegisteredOrigin = isConnected && registerMessage.IsVail(id), 
+                isRegistered = isRegisteredOrigin, 
+                isContains;
             T destinationNode;
             foreach (var nodeDistance in nodeDistances)
             {
@@ -829,13 +874,14 @@ namespace ZG
                 {
                     __nodeIDs.Add(destinationNode, id);
 
-                    if (isRegistered)
-                    {   
-                        if (__nodeIdentities.TryGetFirstValue(destinationNode, out nodeIdentity, out nodeIterator))
+                    if (isRegisteredOrigin &&
+                        __nodeIdentities.TryGetFirstValue(destinationNode, out nodeIdentity, out nodeIterator))
+                    {
+                        do
                         {
-                            do
+                            if ((layerMask & (1 << nodeIdentity.layer)) != 0)
                             {
-                                if ((layerMask & (1 << nodeIdentity.layer)) != 0)
+                                if (isRegistered)
                                 {
                                     if (writer.IsCreated && writer.Capacity - writer.Length < messageSize)
                                     {
@@ -852,7 +898,8 @@ namespace ZG
 
                                     if (!writer.IsCreated)
                                     {
-                                        statusCode = driver.BeginSend(identity.pipeline, identity.connection, out writer);
+                                        statusCode = driver.BeginSend(identity.pipeline, identity.connection,
+                                            out writer);
                                         if (StatusCode.Success != statusCode)
                                         {
                                             //isConnected = false;
@@ -862,21 +909,18 @@ namespace ZG
                                             writer = default;
 
                                             __LogRegisterError(statusCode);
-
-                                            registerMessage.Dispose(nodeIdentity.value, id);
-                                            while (__nodeIdentities.TryGetNextValue(out nodeIdentity, ref nodeIterator))
-                                            {
-                                                if ((layerMask & (1 << nodeIdentity.layer)) != 0)
-                                                    registerMessage.Dispose(nodeIdentity.value, id);
-                                            }
-                                            break;
                                         }
                                     }
-
-                                    registerMessage.Send(ref writer, nodeIdentity.value, id);
                                 }
-                            } while (__nodeIdentities.TryGetNextValue(out nodeIdentity, ref nodeIterator));
-                        }
+
+                                //Debug.Log($"[RPC]Register {nodeIdentity.value} To {id} In {destinationNode}");
+
+                                if (isRegistered)
+                                    registerMessage.Send(ref writer, nodeIdentity.value, id);
+                                else
+                                    registerMessage.Dispose(nodeIdentity.value, id);
+                            }
+                        } while (__nodeIdentities.TryGetNextValue(out nodeIdentity, ref nodeIterator));
                     }
                 }
             }
@@ -917,6 +961,8 @@ namespace ZG
                     __identities.TryGetValue(removeID, out targetIdentity) &&
                     targetIdentity.connection.IsCreated)
                 {
+                    //Debug.Log($"[RPC]Register {id} To {removeID} In {targetIdentity.node}");
+
                     statusCode = driver.BeginSend(targetIdentity.pipeline, targetIdentity.connection, out writer);
                     if (StatusCode.Success == statusCode)
                     {
@@ -942,6 +988,8 @@ namespace ZG
                     __identities.TryGetValue(addID, out targetIdentity) &&
                     targetIdentity.connection.IsCreated)
                 {
+                    //Debug.Log($"[RPC]Unregister {id} To {addID} In {targetIdentity.node}");
+
                     statusCode = driver.BeginSend(targetIdentity.pipeline, targetIdentity.connection, out writer);
                     if (StatusCode.Success == statusCode)
                     {
@@ -954,7 +1002,7 @@ namespace ZG
 
                     if (StatusCode.Success != statusCode)
                     {
-                        Debug.LogError($"[Move]Register {id} for {addID}: {statusCode}");
+                        //Debug.LogError($"[Move]Register {id} for {addID}: {statusCode}");
                         
                         registerMessage.Dispose(id, addID);
                     }
@@ -1341,8 +1389,8 @@ namespace ZG
                 writer.WritePackedUInt(version.value, model);
 
 #if DEBUG
-                Debug.Log($"[RPC]Register {sourceID} To {destinationID}");
-
+                //Debug.Log($"[RPC]Register {sourceID} To {destinationID}.");
+                
                 if (version.isActive)
                     Debug.LogError($"[RPC]Register {sourceID} To {destinationID} with an active version.");
                 
@@ -1379,7 +1427,7 @@ namespace ZG
                 ) + 1;
                 
 #if DEBUG
-                Debug.Log($"[RPC]Register {sourceID} To {destinationID}.");
+                //Debug.Log($"[RPC]Register {sourceID} To {destinationID}.");
 
                 if (version.isActive)
                     Debug.LogError($"[RPC]Register {sourceID} To {destinationID} with an active version.");
@@ -1413,8 +1461,6 @@ namespace ZG
             public void Send(ref DataStreamWriter writer, uint sourceID, uint destinationID)
             {
 #if DEBUG
-                //Debug.Log($"Unregister {sourceID} To {destinationID}");
-
                 Version version;
                 version.id = sourceID;
 
@@ -1428,7 +1474,7 @@ namespace ZG
                 UnityEngine.Assertions.Assert.AreNotEqual(0, version.value);
                 //UnityEngine.Assertions.Assert.IsTrue(isActive);
                 
-                Debug.Log($"[RPC]Unregister {sourceID} To {destinationID}.");
+                //Debug.Log($"[RPC]Unregister {sourceID} To {destinationID}.");
                 
                 if (!isActive)
                     Debug.LogError($"[RPC]Unregister {sourceID} To {destinationID} with an active version.");
@@ -1447,8 +1493,6 @@ namespace ZG
             public void Dispose(uint sourceID, uint destinationID)
             {
 #if DEBUG
-                //Debug.Log($"Unregister {sourceID} To {destinationID}");
-
                 Version version;
                 version.id = sourceID;
 
@@ -1459,7 +1503,7 @@ namespace ZG
                     out var iterator, 
                     out bool isActive);
                 
-                Debug.Log($"[RPC]Unregister {sourceID} To {destinationID}.");
+                //Debug.Log($"[RPC]Unregister {sourceID} To {destinationID}.");
                 
                 if(!isActive)
                     Debug.LogError($"[RPC]Unregister {sourceID} To {destinationID} with an inactive version.");

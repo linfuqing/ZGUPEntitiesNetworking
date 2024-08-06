@@ -294,7 +294,7 @@ namespace ZG
 
                     __identities.Add(id, bufferToInit.instance);
 
-#if DEBUG
+#if UNITY_EDITOR
                     if (bufferToInit.instance.isLocalPlayer)
                         UnityEngine.Assertions.Assert.IsTrue(bufferToInit.instance.name.Contains("RZ"), bufferToInit.instance.name);
 
@@ -306,7 +306,11 @@ namespace ZG
                     __Init(bufferToInit.instance);
 
                     if (bufferToInit.instance._onCreate != null)
+                    {
+                        UnityEngine.Profiling.Profiler.BeginSample($"{bufferToInit.instance}.onCreate");
                         bufferToInit.instance._onCreate();
+                        UnityEngine.Profiling.Profiler.EndSample();
+                    }
 
                     __RPC(id);
 
@@ -593,10 +597,12 @@ namespace ZG
 
         private void __Init(NetworkIdentityComponent identity)
         {
+            UnityEngine.Profiling.Profiler.BeginSample($"{identity}.Init");
             if (__wrapper == null)
                 identity.gameObject.SetActive(true);
             else
                 __wrapper.Init(identity);
+            UnityEngine.Profiling.Profiler.EndSample();
         }
 
         private NetworkIdentityComponent __GetIdentity(uint id)
@@ -614,10 +620,12 @@ namespace ZG
 
         private void __Destroy(bool isLocalPlayer, uint id, int type, NetworkReader reader, NetworkIdentityComponent identity)
         {
+            UnityEngine.Profiling.Profiler.BeginSample($"{identity} Destroy");
             if(__wrapper == null)
                 Destroy(identity.gameObject);
             else
                 __wrapper.Destroy(isLocalPlayer, id, type, reader, identity);
+            UnityEngine.Profiling.Profiler.EndSample();
         }
 
         private bool __Create(bool isLocalPlayer, int type, uint id, NetworkReader reader, ref INetworkClientCreateRequest request)
@@ -640,7 +648,11 @@ namespace ZG
                 return true;*/
             }
 
-            return __wrapper.Create(isLocalPlayer, id, type, reader, ref request);
+            UnityEngine.Profiling.Profiler.BeginSample($"{type} Create");
+            var result = __wrapper.Create(isLocalPlayer, id, type, reader, ref request);
+            UnityEngine.Profiling.Profiler.EndSample();
+
+            return result;
         }
 
         private bool __Create(uint id, uint identity, NetworkReader reader)
@@ -848,6 +860,8 @@ namespace ZG
         {
             var client = this.client;
 
+            UnityEngine.Profiling.Profiler.BeginSample("Client Messages");
+
             Action<NetworkReader> handler;
             var messages = client.messagesReadOnly;
             NetworkClient.Message message;
@@ -879,6 +893,8 @@ namespace ZG
                     Debug.LogException(e.InnerException ?? e);
                 }
             }
+            
+            UnityEngine.Profiling.Profiler.EndSample();
 
             if (isConnected/* && GameObjectEntity.IsAllEntitiesDeserialized(GameObjectEntity.DeserializedType.InstanceOnly)*/)
             {
@@ -915,6 +931,8 @@ namespace ZG
                     UnityEngine.Profiling.Profiler.EndSample();
                 }
 
+                UnityEngine.Profiling.Profiler.BeginSample("Client RPC IDs");
+                
                 if (__ids.IsCreated)
                     __ids.Clear();
                 else
@@ -923,6 +941,8 @@ namespace ZG
                 client.GetIDs(ref __ids);
                 foreach (var id in __ids)
                     __RPC(id);
+                
+                UnityEngine.Profiling.Profiler.EndSample();
             }
         }
 

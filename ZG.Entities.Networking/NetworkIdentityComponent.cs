@@ -161,14 +161,16 @@ namespace ZG
 
             if (!__handlers.TryGetValue(handle, out var action) || action == null)
             {
-                UnityEngine.Debug.LogError($"The handler of {handle} is missing!");
+                Debug.LogError($"The handler of {handle} is missing!");
 
                 return false;
             }
 
             try
             {
+                UnityEngine.Profiling.Profiler.BeginSample($"{this}.InvokeHandler {handle}");
                 action(connection, reader);
+                UnityEngine.Profiling.Profiler.EndSample();
             }
             catch(Exception e)
             {
