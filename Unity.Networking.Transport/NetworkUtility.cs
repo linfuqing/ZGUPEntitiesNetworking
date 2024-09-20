@@ -22,7 +22,7 @@ namespace Unity.Networking.Transport
 
     public static partial class NetworkUtility
     {
-        public static int GetSendSize()
+        /*public static int GetSendSize()
         {
             return UnsafeUtility.SizeOf<NetworkDriver.Concurrent.PendingSend>();
         }
@@ -54,7 +54,7 @@ namespace Unity.Networking.Transport
             send.connection = pendingSend->Connection;
 
             return send;
-        }
+        }*/
 
         public static int PayloadCapacity(
             this in NetworkDriver.Concurrent driver,

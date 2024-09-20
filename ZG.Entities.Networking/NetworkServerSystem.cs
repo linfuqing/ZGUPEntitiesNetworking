@@ -113,17 +113,26 @@ namespace ZG
                 /*if (NetworkConnection.State.Connected != driver.GetConnectionState(connection))
                     return;*/
                 
-                if (!commandIndices.TryGetFirstValue(connection, out var commandIndex, out var iterator))
+                if (!this.commandIndices.TryGetFirstValue(connection, out var commandIndex, out var iterator))
                     return;
 
-                int result;
+                var commandIndices = new NativeList<int>(Allocator.Temp);
+                commandIndices.Add(commandIndex);
+
                 do
                 {
-                    result = commands[commandIndex].Send(ref driver);
-                    if(result < 0)
+                    commandIndices.Add(commandIndex);
+                } while (this.commandIndices.TryGetNextValue(out commandIndex, ref iterator));
+                
+                commandIndices.Sort();
+
+                int result;
+                foreach (var temp in commandIndices)
+                {
+                    result = commands[temp].Send(ref driver);
+                    if (result < 0)
                         __LogError((StatusCode)result);
-                    
-                } while (commandIndices.TryGetNextValue(out commandIndex, ref iterator));
+                }
             }
         }
 
