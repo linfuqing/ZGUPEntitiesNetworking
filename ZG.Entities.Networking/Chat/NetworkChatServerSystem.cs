@@ -579,7 +579,7 @@ namespace ZG
         }
     }
 
-    [AutoCreateIn("Server"), BurstCompile]
+    [AutoCreateIn("Server"), BurstCompile, UpdateAfter(typeof(NetworkServerSystem))]
     public partial struct NetworkChatServerSystem : ISystem
     {
         public static readonly int InnerloopBatchCount = 4;

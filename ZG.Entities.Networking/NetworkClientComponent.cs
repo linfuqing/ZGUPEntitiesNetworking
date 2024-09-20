@@ -269,14 +269,19 @@ namespace ZG
             if (__buffersToInit != null)
             {
                 var enumerator = __buffersToInit.GetEnumerator();
+
                 while (enumerator.MoveNext())
                 {
                     var pair = enumerator.Current;
+                    
+                    enumerator.Dispose();
 
                     uint id = pair.Key;
                     __buffersToInit.Remove(id);
 
                     var bufferToInit = pair.Value;
+
+                    UnityEngine.Profiling.Profiler.BeginSample(bufferToInit.instance.name);
 
                     bufferToInit.instance._host = this;
 
@@ -290,15 +295,22 @@ namespace ZG
                     //Debug.Log($"Init Identity {id} : {bufferToInit.instance.name} : {bufferToInit.instance.entity}");
 
                     if (__identities == null)
-                         __identities = new Dictionary<uint, NetworkIdentityComponent>();
+                        __identities = new Dictionary<uint, NetworkIdentityComponent>();
 
                     __identities.Add(id, bufferToInit.instance);
 
 #if UNITY_EDITOR
-                    if (bufferToInit.instance.isLocalPlayer)
-                        UnityEngine.Assertions.Assert.IsTrue(bufferToInit.instance.name.Contains("RZ"), bufferToInit.instance.name);
+                    UnityEngine.Profiling.Profiler.BeginSample("[Editor Only]Replace Name");
 
-                    bufferToInit.instance.name = System.Text.RegularExpressions.Regex.Replace(bufferToInit.instance.name, @"\(((Clone)|(\d+))\)", "(" + id + ')');
+                    if (bufferToInit.instance.isLocalPlayer)
+                        UnityEngine.Assertions.Assert.IsTrue(bufferToInit.instance.name.Contains("RZ"),
+                            bufferToInit.instance.name);
+
+                    bufferToInit.instance.name =
+                        System.Text.RegularExpressions.Regex.Replace(bufferToInit.instance.name,
+                            @"\(((Clone)|(\d+))\)", "(" + id + ')');
+
+                    UnityEngine.Profiling.Profiler.EndSample();
 #endif
 
                     //instance.gameObject.SetActive(false);
@@ -307,15 +319,19 @@ namespace ZG
 
                     if (bufferToInit.instance._onCreate != null)
                     {
-                        UnityEngine.Profiling.Profiler.BeginSample($"{bufferToInit.instance}.onCreate");
+                        UnityEngine.Profiling.Profiler.BeginSample("onCreate");
                         bufferToInit.instance._onCreate();
                         UnityEngine.Profiling.Profiler.EndSample();
                     }
 
                     __RPC(id);
 
+                    UnityEngine.Profiling.Profiler.EndSample();
+
                     return bufferToInit.instance;
                 }
+                
+                enumerator.Dispose();
             }
 
             return null;
@@ -325,13 +341,13 @@ namespace ZG
         {
             if (__buffersToCreate != null)
             {
-                var enumerator = __buffersToCreate/*__indicesToCreate*/.GetEnumerator();
+                var enumerator = __buffersToCreate /*__indicesToCreate*/.GetEnumerator();
                 while (enumerator.MoveNext())
                 {
                     var pair = enumerator.Current;
 
                     //uint id = pair.Value;
-                    var bufferToCreate = pair.Value;//__bufferToCreate[id];
+                    var bufferToCreate = pair.Value; //__bufferToCreate[id];
                     if (isSync || bufferToCreate.request.isDone)
                     {
                         enumerator.Dispose();
@@ -341,7 +357,7 @@ namespace ZG
                         //__indicesToCreate.Remove(pair.Key);
 
                         //if (__identities == null)
-                       //     __identities = new Dictionary<uint, NetworkIdentityComponent>();
+                        //     __identities = new Dictionary<uint, NetworkIdentityComponent>();
 
                         var instance = bufferToCreate.request.instance;
                         if (instance == null)
@@ -386,6 +402,8 @@ namespace ZG
                         return instance;
                     }
                 }
+                
+                enumerator.Dispose();
             }
 
             return null;
@@ -597,7 +615,7 @@ namespace ZG
 
         private void __Init(NetworkIdentityComponent identity)
         {
-            UnityEngine.Profiling.Profiler.BeginSample($"{identity}.Init");
+            UnityEngine.Profiling.Profiler.BeginSample($"Init");
             if (__wrapper == null)
                 identity.gameObject.SetActive(true);
             else
@@ -607,20 +625,20 @@ namespace ZG
 
         private NetworkIdentityComponent __GetIdentity(uint id)
         {
+            UnityEngine.Profiling.Profiler.BeginSample("GetIdentity");
+            NetworkIdentityComponent result;
             if (__wrapper == null)
-            {
-                if (__identities != null && __identities.TryGetValue(id, out var instance))
-                    return instance;
+                result = __identities != null && __identities.TryGetValue(id, out var instance) ? instance : null;
+            else
+                result = __wrapper.GetIdentity(id);
+            UnityEngine.Profiling.Profiler.EndSample();
 
-                return null;
-            }
-
-            return __wrapper.GetIdentity(id);
+            return result;
         }
 
         private void __Destroy(bool isLocalPlayer, uint id, int type, NetworkReader reader, NetworkIdentityComponent identity)
         {
-            UnityEngine.Profiling.Profiler.BeginSample($"{identity} Destroy");
+            UnityEngine.Profiling.Profiler.BeginSample("Destroy");
             if(__wrapper == null)
                 Destroy(identity.gameObject);
             else
@@ -648,7 +666,7 @@ namespace ZG
                 return true;*/
             }
 
-            UnityEngine.Profiling.Profiler.BeginSample($"{type} Create");
+            UnityEngine.Profiling.Profiler.BeginSample("Create");
             var result = __wrapper.Create(isLocalPlayer, id, type, reader, ref request);
             UnityEngine.Profiling.Profiler.EndSample();
 
@@ -714,24 +732,46 @@ namespace ZG
                         switch (buffer.ReadMessage(out var reader, out uint identity))
                         {
                             case NetworkMessageType.RPC:
+                                UnityEngine.Profiling.Profiler.BeginSample("RPC");
+                                
                                 var instance = __GetIdentity(id);
                                 if (instance != null)
+                                {
+                                    UnityEngine.Profiling.Profiler.BeginSample(instance.name);
+                                
                                     instance.InvokeHandler(reader.ReadPackedUInt(), client.connection, reader);
+                                    
+                                    UnityEngine.Profiling.Profiler.EndSample();
+                                }
                                 else
                                     Debug.LogError($"RPC Error: {id} : {reader.ReadPackedUInt()}");
+                                
+                                UnityEngine.Profiling.Profiler.EndSample();
                                 break;
                             case NetworkMessageType.Register:
-                                if(__Create(id, identity, reader))
+                                UnityEngine.Profiling.Profiler.BeginSample("Register");
+                                bool result = __Create(id, identity, reader);
+                                UnityEngine.Profiling.Profiler.EndSample();
+                                
+                                if(result)
                                     return;
 
                                 break;
                             case NetworkMessageType.Unregister:
+                                UnityEngine.Profiling.Profiler.BeginSample("Unregister");
+
                                 if (__identities != null && __identities.TryGetValue(id, out instance))
                                 {
+                                    UnityEngine.Profiling.Profiler.BeginSample(instance.name);
+
                                     if (instance is NetworkIdentityComponent)
                                     {
+                                        UnityEngine.Profiling.Profiler.BeginSample("onDestroy");
+
                                         if (instance._onDestroy != null)
                                             instance._onDestroy();
+                                        
+                                        UnityEngine.Profiling.Profiler.EndSample();
                                     }
 
                                     __identities.Remove(id);
@@ -742,9 +782,12 @@ namespace ZG
                                         instance.type,
                                         reader, 
                                         instance);
+                                    UnityEngine.Profiling.Profiler.EndSample();
                                 }
                                 else
                                     Debug.LogError($"Unregister Error: {id}");
+                                
+                                UnityEngine.Profiling.Profiler.EndSample();
                                 break;
                             default:
                                 return;

@@ -22,6 +22,8 @@ namespace ZG
 
     public interface INetworkMessage
     {
+        int size { get; }
+        
         void Serialize(ref NetworkWriter writer);
 
         void Deserialize(ref NetworkReader reader);
@@ -59,6 +61,157 @@ namespace ZG
         public NetworkChannel[] channels;
     }
 
+    /*public struct NetworkHandlerManager
+    {
+        private enum MethodType
+        {
+            Normal,
+            ReadOnly
+        }
+
+        private struct Method
+        {
+            public MethodType type;
+
+            public int actionIndex;
+        }
+
+        private class Shared
+        {
+            private Pool<Action<NetworkConnection, NetworkReader>> __actions;
+            private Pool<Action<NetworkReader>> __actionsReadOnly;
+            private Dictionary<(object, uint), Method> __methods;
+            
+            public bool InvokeHandler(object identity, uint handle, in NetworkConnection connection, NetworkReader reader)
+            {
+                if (__methods == null)
+                    return false;
+
+                if (!__methods.TryGetValue((identity, handle), out var method))
+                {
+                    Debug.LogError($"The handler of {handle} is missing!");
+
+                    return false;
+                }
+
+                switch (method.type)
+                {
+                    case MethodType.ReadOnly:
+                        if (!__actionsReadOnly.TryGetValue(method.actionIndex, out var actionReadOnly))
+                        {
+                            Debug.LogError($"The handler of {handle} is missing!");
+
+                            return false;
+                        }
+                        
+                        try
+                        {
+#if ENABLE_PROFILER
+                            UnityEngine.Profiling.Profiler.BeginSample(actionReadOnly.Target.GetType().Name);
+                            UnityEngine.Profiling.Profiler.BeginSample(actionReadOnly.Method.Name);
+#endif
+                            actionReadOnly(reader);
+                
+#if ENABLE_PROFILER
+                            UnityEngine.Profiling.Profiler.EndSample();
+                            UnityEngine.Profiling.Profiler.EndSample();
+#endif
+                        }
+                        catch(Exception e)
+                        {
+                            UnityEngine.Debug.LogException(e.InnerException ?? e);
+                        }
+
+                        break;
+                    default:
+                        if (!__actions.TryGetValue(method.actionIndex, out var action))
+                        {
+                            Debug.LogError($"The handler of {handle} is missing!");
+
+                            return false;
+                        }
+                        
+                        try
+                        {
+#if ENABLE_PROFILER
+                            UnityEngine.Profiling.Profiler.BeginSample(action.Target.GetType().Name);
+                            UnityEngine.Profiling.Profiler.BeginSample(action.Method.Name);
+#endif
+                            action(connection, reader);
+                
+#if ENABLE_PROFILER
+                            UnityEngine.Profiling.Profiler.EndSample();
+                            UnityEngine.Profiling.Profiler.EndSample();
+#endif
+                        }
+                        catch(Exception e)
+                        {
+                            UnityEngine.Debug.LogException(e.InnerException ?? e);
+                        }
+                        break;
+                }
+
+                return true;
+            }
+
+            public bool UnregisterHandler(object identity, uint handle)
+            {
+                if (__methods == null || !__methods.TryGetValue((identity, handle), out var method))
+                    return false;
+                
+                switch (method.type)
+                {
+                    case MethodType.ReadOnly:
+                        if (!__actionsReadOnly.RemoveAt(method.actionIndex))
+                            return false;
+                        break;
+                    default:
+                        if (!__actions.RemoveAt(method.actionIndex))
+                            return false;
+
+                        break;
+                }
+
+                return true;
+            }
+
+            public void RegisterHandler(object identity, uint handle, Action<NetworkConnection, NetworkReader> action)
+            {
+                if (__actions == null)
+                    __actions = new Pool<Action<NetworkConnection, NetworkReader>>();
+
+                Method method;
+                method.type = MethodType.Normal;
+                method.actionIndex = __actions.Add(action);
+                
+                if (__methods == null)
+                    __methods = new Dictionary<(object, uint), Method>();
+
+                __methods.Add((identity, handle), method);
+            }
+
+            public void RegisterHandler(object identity, uint handle, Action<NetworkReader> action)
+            {
+                if (__actionsReadOnly == null)
+                    __actionsReadOnly = new Pool<Action<NetworkReader>>();
+
+                Method method;
+                method.type = MethodType.ReadOnly;
+                method.actionIndex = __actionsReadOnly.Add(action);
+                
+                if (__methods == null)
+                    __methods = new Dictionary<(object, uint), Method>();
+
+                __methods.Add((identity, handle), method);
+            }
+
+        }
+        
+        private static Shared __shared;
+
+        private object __instance;
+    }*/
+
     [EntityComponent(typeof(NetworkIdentity))]
     [EntityComponent(typeof(NetworkIdentityType))]
     public class NetworkIdentityComponent : EntityProxyComponent
@@ -68,7 +221,7 @@ namespace ZG
         internal Action _onCreate;
         internal Action _onDestroy;
 
-        private Dictionary<uint, Action<NetworkConnection, NetworkReader>> __handlers;
+        private Dictionary<uint, Delegate> __handlers;
 
         public bool isLocalPlayer
         {
@@ -153,13 +306,13 @@ namespace ZG
 
             return instance;
         }
-
+        
         public bool InvokeHandler(uint handle, in NetworkConnection connection, NetworkReader reader)
         {
             if (__handlers == null)
                 return false;
 
-            if (!__handlers.TryGetValue(handle, out var action) || action == null)
+            if (!__handlers.TryGetValue(handle, out var handler) || handler == null)
             {
                 Debug.LogError($"The handler of {handle} is missing!");
 
@@ -168,9 +321,20 @@ namespace ZG
 
             try
             {
-                UnityEngine.Profiling.Profiler.BeginSample($"{this}.InvokeHandler {handle}");
-                action(connection, reader);
+#if ENABLE_PROFILER
+                UnityEngine.Profiling.Profiler.BeginSample(handler.Target.GetType().Name);
+                UnityEngine.Profiling.Profiler.BeginSample(handler.Method.Name);
+#endif
+                var action = handler as Action<NetworkConnection, NetworkReader>;
+                if(action != null)
+                    action(connection, reader);
+                else
+                    ((Action<NetworkReader>)handler)(reader);
+                
+#if ENABLE_PROFILER
                 UnityEngine.Profiling.Profiler.EndSample();
+                UnityEngine.Profiling.Profiler.EndSample();
+#endif
             }
             catch(Exception e)
             {
@@ -188,17 +352,17 @@ namespace ZG
         public void RegisterHandler(uint handle, Action<NetworkConnection, NetworkReader> action)
         {
             if (__handlers == null)
-                __handlers = new Dictionary<uint, Action<NetworkConnection, NetworkReader>>();
+                __handlers = new Dictionary<uint, Delegate>();
 
             __handlers.Add(handle, action);
         }
 
         public void RegisterHandler(uint handle, Action<NetworkReader> action)
         {
-            RegisterHandler(handle, action == null ? (Action<NetworkConnection, NetworkReader>)null : delegate (NetworkConnection connection, NetworkReader reader)
-            {
-                action(reader);
-            });
+            if (__handlers == null)
+                __handlers = new Dictionary<uint, Delegate>();
+
+            __handlers.Add(handle, action);
         }
 
         public int RPC(int channel, uint handle)

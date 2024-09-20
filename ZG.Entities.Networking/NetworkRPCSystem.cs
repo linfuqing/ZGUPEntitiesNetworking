@@ -3153,6 +3153,15 @@ namespace ZG
 
         public NativeArray<ActiveEvent>.ReadOnly activeEventsReadOnly => __activeEvents.AsArray().AsReadOnly();
 
+        public static int PayloadCapacity(in NetworkDriver.Concurrent driver, in NetworkPipeline pipeline)
+        {
+            int capacity = driver.PayloadCapacity(pipeline);
+            //MSG TYPE
+            capacity -= SizeOfCommandHeader;
+
+            return capacity;
+        }
+
         public NetworkRPCCommander(in AllocatorManager.AllocatorHandle allocator)
         {
             __buffer = new NativeBuffer(allocator, 1);
@@ -3249,13 +3258,13 @@ namespace ZG
 
         public bool BeginCommand(
             uint id, 
+            int capacity, 
             in NetworkPipeline pipeline, 
-            in NetworkDriver driver, 
             out DataStreamWriter stream)
         {
-            int capacity = driver.PayloadCapacity(pipeline);
+            //int capacity = driver.PayloadCapacity(pipeline);
             //MSG TYPE
-            capacity -= SizeOfCommandHeader;
+            //capacity -= SizeOfCommandHeader;
 
             if (capacity > 0)
             {
@@ -3278,6 +3287,15 @@ namespace ZG
 
             return false;
         }
+        
+        /*public bool BeginCommand(
+            uint id, 
+            in NetworkPipeline pipeline, 
+            in NetworkDriver driver, 
+            out DataStreamWriter stream)
+        {
+            return BeginCommand(id, PayloadCapacity(driver, pipeline), pipeline, out stream);
+        }*/
 
         public int EndCommandInit(InitType type, uint targetID, DataStreamWriter writer)
         {
@@ -3598,7 +3616,7 @@ namespace ZG
             collectRPC.destinations = __destinationRPCCommands;
             collectRPC.sources = __sourceRPCCommands;
             collectRPC.rpcIDs = __rpcIDs;
-            var jobHandle = collectRPC.Schedule(inputDeps);
+            var jobHandle = collectRPC.ScheduleByRef(inputDeps);
 
             /*CommandRPC commandRPC;
             commandRPC.model = model;
@@ -3622,14 +3640,14 @@ namespace ZG
             command.rpcBufferInstanceOutputs = __rpcBufferInstanceOutputs.AsParallelWriter();
             command.rpcBufferPoolCount = __rpcBufferCount;
 
-            jobHandle = command.Schedule(__rpcIDs, innerloopBatchCount, jobHandle);
+            jobHandle = command.ScheduleByRef(__rpcIDs, innerloopBatchCount, jobHandle);
 
             Clear clear;
             clear.buffer = __buffer;
             clear.initCommands = __initCommands;
             clear.initEvents = __initEvents;
 
-            return clear.Schedule(jobHandle);
+            return clear.ScheduleByRef(jobHandle);
         }
 
         private bool __EndCommand(DataStreamWriter writer, out int position, out uint id, out NetworkPipeline pipeline)

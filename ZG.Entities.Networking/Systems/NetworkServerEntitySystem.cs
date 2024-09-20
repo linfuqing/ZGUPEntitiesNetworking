@@ -39,6 +39,7 @@ namespace ZG
 
     public struct NetworkServerEntityChannel : IBufferElementData
     {
+        public int capacity;
         public NetworkPipeline pipeline;
     }
 
@@ -277,7 +278,7 @@ namespace ZG
             [ReadOnly]
             public BufferLookup<NetworkServerEntityBuffer> buffers;
 
-            public NetworkDriver driver;
+            //public NetworkDriver driver;
             public NetworkRPCCommander rpcCommander;
 
             public NativeQueue<Result> results;
@@ -285,6 +286,7 @@ namespace ZG
             public void Execute()
             {
                 int value;
+                NetworkServerEntityChannel channel;
                 NativeArray<uint> ids;
                 //DynamicBuffer<NetworkServerEntityBuffer> buffer;
                 NetworkServerEntityBufferRange bufferRange;
@@ -293,7 +295,8 @@ namespace ZG
                 while (results.TryDequeue(out var result))
                 {
                     component = components[result.entity][result.componentIndex];
-                    if (!rpcCommander.BeginCommand(identities[result.entity].id, channels[component.channel].pipeline, driver, out stream))
+                    channel = channels[component.channel];
+                    if (!rpcCommander.BeginCommand(identities[result.entity].id, channel.capacity, channel.pipeline, out stream))
                         continue;
 
                     stream.WritePackedUInt(component.handle);
@@ -434,7 +437,7 @@ namespace ZG
 
             var jobHandle = collect.ScheduleParallelByRef(__group, state.Dependency);
 
-            var manager = __managerGroup.GetSingleton<NetworkServerManager>();
+            //var manager = __managerGroup.GetSingleton<NetworkServerManager>();
             var controller = __controllerGroup.GetSingleton<NetworkRPCController>();
             
             Send send;
@@ -444,19 +447,19 @@ namespace ZG
             send.ids = __ids.UpdateAsRef(ref state);
             send.bufferRanges = __bufferRanges.UpdateAsRef(ref state);
             send.buffers = __buffers.UpdateAsRef(ref state);
-            send.driver = manager.server.driver;
+            //send.driver = manager.server.driver;
             send.rpcCommander = controller.commander;
             send.results = __results;
 
-            ref var managerJobManager = ref manager.lookupJobManager;
+            //ref var managerJobManager = ref manager.lookupJobManager;
             ref var controllerJobManager = ref controller.lookupJobManager;
 
             jobHandle = JobHandle.CombineDependencies(jobHandle, 
-                managerJobManager.readWriteJobHandle,
+                //managerJobManager.readWriteJobHandle,
                 controllerJobManager.readWriteJobHandle);
             jobHandle = send.ScheduleByRef(jobHandle);
 
-            managerJobManager.readWriteJobHandle = jobHandle;
+            //managerJobManager.readWriteJobHandle = jobHandle;
             controllerJobManager.readWriteJobHandle = jobHandle;
 
             state.Dependency = jobHandle;

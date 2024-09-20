@@ -522,7 +522,7 @@ namespace ZG
             popEvents.buffers = __buffers;
             popEvents.rpcBuffers = __rpcBuffers;
 
-            return popEvents.Schedule(jobHandle);
+            return popEvents.ScheduleByRef(jobHandle);
         }
     }
 

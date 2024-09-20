@@ -69,7 +69,7 @@ namespace ZG
 
         bool Send(int channel, uint messageType, in NetworkConnection connection);
 
-        bool BeginSend(int channel, uint messageType, in NetworkConnection connection, out NetworkWriter writer);
+        bool BeginSend(int channel, int messageSize, uint messageType, in NetworkConnection connection, out NetworkWriter writer);
 
         int EndSend(NetworkWriter writer);
 
@@ -144,6 +144,8 @@ namespace ZG
         [SerializeField]
         internal string _worldName = "Server";
 
+        private int __nullpipelineCapacity;
+
         private World __world;
         private NetworkServerManager __manager;
         private NetworkRPCController __controller;
@@ -166,7 +168,7 @@ namespace ZG
 
         public event Action<uint, bool> onActive;
 
-        public bool isConfigured => pipelines.Length > 0;
+        public bool isConfigured => channels.Length > 0;
 
         public bool isListening => server.isListening;
 
@@ -267,8 +269,8 @@ namespace ZG
             }
         }
 
-        public NativeArray<NetworkPipeline> pipelines => world.EntityManager.GetBuffer<NetworkServerEntityChannel>(__entitySystem, true).AsNativeArray()
-                .Reinterpret<NetworkPipeline>();
+        public NativeArray<NetworkServerEntityChannel> channels => world.EntityManager
+            .GetBuffer<NetworkServerEntityChannel>(__entitySystem, true).AsNativeArray();
 
         public bool IsExclusiveTransaction(uint id) => __exclusiveTransactionIdentityIDs != null && __exclusiveTransactionIdentityIDs.Contains(id);
 
@@ -279,7 +281,7 @@ namespace ZG
 
         public bool IsConnected(in NetworkConnection connection)
         {
-            return NetworkConnection.State.Connected == server.driver.GetConnectionState(connection);
+            return NetworkConnection.State.Connected == server.GetConnectionState(connection);
         }
 
         public uint GetID(in NetworkConnection connection)
@@ -360,7 +362,7 @@ namespace ZG
                 position,
                 type, 
                 id,
-                server.driver.GetConnectionState(connection) == NetworkConnection.State.Connected);
+                server.GetConnectionState(connection) == NetworkConnection.State.Connected);
 
             identity._host = null;
 
@@ -462,13 +464,21 @@ namespace ZG
 
         public void Configure(in NativeArray<NetworkPipelineType> pipelineTypes)
         {
-            var driver = server.driver;
+            var server = this.server;
+            var driver = server.driverConcurrent;
+            __nullpipelineCapacity = NetworkRPCCommander.PayloadCapacity(driver, NetworkPipeline.Null);
+            
             int numPipelineTypes = pipelineTypes.Length;
             __entitySystem = world.GetExistingSystem<NetworkServerEntitySystem>();
             var channels = world.EntityManager.GetBuffer<NetworkServerEntityChannel>(__entitySystem, false);
             channels.ResizeUninitialized(numPipelineTypes);
             for (int i = 0; i < numPipelineTypes; ++i)
-                channels.ElementAt(i).pipeline = driver.CreatePipeline(pipelineTypes[i]);
+            {
+                ref var channel = ref channels.ElementAt(i);
+                
+                channel.pipeline = server.CreatePipeline(pipelineTypes[i]);
+                channel.capacity = NetworkRPCCommander.PayloadCapacity(driver, channel.pipeline);
+            }
         }
 
         public bool Listen(ushort port, NetworkFamily family = NetworkFamily.Ipv4)
@@ -547,7 +557,7 @@ namespace ZG
         public bool Move(uint id, int node, int layerMask, float visibilityDistance)
         {
             var commander = this.commander;
-            if(commander.BeginCommand(id, NetworkPipeline.Null, server.driver, out var writer))
+            if(commander.BeginCommand(id, __nullpipelineCapacity, NetworkPipeline.Null, out var writer))
             {
                 __SendRegisterMessage(ref writer, id);
 
@@ -571,9 +581,10 @@ namespace ZG
             return false;
         }
 
-        public bool BeginRPC(int channel, uint id, uint handle, out NetworkWriter writer)
+        public bool BeginRPC(int channelIndex, uint id, uint handle, out NetworkWriter writer)
         {
-            if (commander.BeginCommand(id, pipelines[channel], server.driver, out writer))
+            var channel = channels[channelIndex];
+            if (commander.BeginCommand(id, channel.capacity, channel.pipeline, out writer))
             {
                 writer.WritePackedUInt(handle);
 
@@ -609,9 +620,19 @@ namespace ZG
             return EndRPC(NetworkRPCType.Normal, writer, default, ids);
         }
 
-        public bool BeginSend(int channel, uint messageType, in NetworkConnection connection, out NetworkWriter writer)
+        public bool BeginSend(
+            int channel, 
+            int messageSize, 
+            uint messageType, 
+            in NetworkConnection connection, 
+            out NetworkWriter writer)
         {
-            var statusCode = server.BeginSend(pipelines[channel], connection, messageType, out writer);
+            var statusCode = server.BeginSend(
+                channels[channel].pipeline, 
+                connection, 
+                messageType, 
+                messageSize, 
+                out writer);
             if (StatusCode.Success == statusCode)
                 return true;
 
@@ -633,7 +654,7 @@ namespace ZG
 
         public bool Send(int channel, uint messageType, in NetworkConnection connection)
         {
-            if (BeginSend(channel, messageType, connection, out var writer))
+            if (BeginSend(channel, 0, messageType, connection, out var writer))
             {
                 int result = EndSend(writer);
                 if (result >= 0)
@@ -645,7 +666,7 @@ namespace ZG
 
         public bool Send<T>(int channel, uint messageType, in NetworkConnection connection, T message) where T : INetworkMessage
         {
-            if (BeginSend(channel, messageType, connection, out var writer))
+            if (BeginSend(channel, message.size, messageType, connection, out var writer))
             {
                 message.Serialize(ref writer);
 
@@ -657,9 +678,10 @@ namespace ZG
             return false;
         }
 
-        public bool Send<T>(int channel, uint messageType, uint id, T message) where T : INetworkMessage
+        public bool Send<T>(int channelIndex, uint messageType, uint id, T message) where T : INetworkMessage
         {
-            if (commander.BeginCommand(id, pipelines[channel], server.driver, out var writer))
+            var channel = channels[channelIndex];
+            if (commander.BeginCommand(id, channel.capacity, channel.pipeline, out var writer))
             {
                 message.Serialize(ref writer);
 
@@ -730,7 +752,7 @@ namespace ZG
         }
 
         private bool __Unregister(
-            int channel, 
+            int channelIndex, 
             uint id, 
             in NetworkConnection connection, 
             NetworkReader reader)
@@ -754,7 +776,8 @@ namespace ZG
                     if(identity != null)
                         identity._host = null;
 
-                    if (commander.BeginCommand(id, pipelines[channel], server.driver, out var writer))
+                    var channel = channels[channelIndex];
+                    if (commander.BeginCommand(id, channel.capacity, channel.pipeline, out var writer))
                     {
                         __SendUnregisterMessage(ref writer, id);
 
@@ -775,7 +798,8 @@ namespace ZG
                 }
                 else
                 {
-                    if (commander.BeginCommand(id, pipelines[channel], server.driver, out var writer))
+                    var channel = channels[channelIndex];
+                    if (commander.BeginCommand(id, channel.capacity, channel.pipeline, out var writer))
                     {
                         __SendUnregisterMessage(ref writer, id);
                         int result = commander.EndCommandDisconnect(type, writer);
@@ -832,7 +856,7 @@ namespace ZG
 
         private bool __Register(
             uint id, 
-            int channel, 
+            int channelIndex, 
             int node,
             int layerMask, 
             float visibilityDistance, 
@@ -842,9 +866,8 @@ namespace ZG
 
             int type = target.type;
 
-            var pipeline = pipelines[channel];
-            var driver = server.driver;
-            if (commander.BeginCommand(id, pipeline, driver, out var writer))
+            var channel = channels[channelIndex];
+            if (commander.BeginCommand(id, channel.capacity, channel.pipeline, out var writer))
             {
                 __SendRegisterMessage(ref writer, id);
 
@@ -890,7 +913,7 @@ namespace ZG
             target.SetComponentData(identity);*/
 
             target._host = this;
-            target.isLocalPlayer = driver.GetConnectionState(connection) == NetworkConnection.State.Connected;
+            target.isLocalPlayer = server.GetConnectionState(connection) == NetworkConnection.State.Connected;
 
             /*if (__identities == null)
                 __identities = new Dictionary<uint, NetworkIdentityComponent>();
@@ -1039,7 +1062,7 @@ namespace ZG
                 }
             }
 
-            var driver = server.driver;
+            //var driver = server.driver;
             NetworkWriter writer;
 
             __ids.Clear();
@@ -1050,7 +1073,7 @@ namespace ZG
             {
                 foreach (var initEvent in commander.GetInitEvents(id))
                 {
-                    if (commander.BeginCommand(id, NetworkPipeline.Null, driver, out writer))
+                    if (commander.BeginCommand(id, __nullpipelineCapacity, NetworkPipeline.Null, out writer))
                     {
                         if (__Init(initEvent.type == NetworkRPCCommander.InitType.New, id, initEvent.id, ref writer))
                         {

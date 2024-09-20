@@ -1,3 +1,5 @@
+using System;
+using System.Diagnostics;
 using Unity.Jobs;
 using Unity.Burst;
 using Unity.Entities;
@@ -67,11 +69,62 @@ namespace ZG
 
     public struct NetworkServer
     {
+        private struct Command
+        {
+            public NetworkConnection connection;
+            public NetworkPipeline pipeline;
+            public UnsafeBlock block;
+
+            public int Send(ref NetworkDriver.Concurrent driver)
+            {
+                int result = driver.BeginSend(pipeline, connection, out var writer);
+                if (result < 0)
+                    return result;
+
+                writer.WriteBytes(block.AsArray<byte>());
+                return driver.EndSend(writer);
+            }
+        }
+        
         private struct Event
         {
             public NetworkMessageType messageType;
             public NetworkConnection connection;
             public uint id;
+        }
+
+        [BurstCompile]
+        private struct Apply : IJobParallelFor
+        {
+            public NetworkDriver.Concurrent driver;
+            
+            [ReadOnly]
+            public NativeArray<NetworkConnection> connections;
+
+            [ReadOnly] 
+            public NativeArray<Command> commands;
+            
+            [ReadOnly]
+            public NativeParallelMultiHashMap<NetworkConnection, int> commandIndices;
+
+            public void Execute(int index)
+            {
+                var connection = connections[index];
+                /*if (NetworkConnection.State.Connected != driver.GetConnectionState(connection))
+                    return;*/
+                
+                if (!commandIndices.TryGetFirstValue(connection, out var commandIndex, out var iterator))
+                    return;
+
+                int result;
+                do
+                {
+                    result = commands[commandIndex].Send(ref driver);
+                    if(result < 0)
+                        __LogError((StatusCode)result);
+                    
+                } while (commandIndices.TryGetNextValue(out commandIndex, ref iterator));
+            }
         }
 
         [BurstCompile]
@@ -86,9 +139,13 @@ namespace ZG
 
             public NativeList<Event> events;
 
+            public NativeList<Command> commands;
+
             public NativeList<NetworkServerMessage> messages;
 
             public NativeParallelMultiHashMap<uint, NetworkServerMessage> buffers;
+
+            public NativeParallelMultiHashMap<NetworkConnection, int> commandIndices;
 
             public void Execute()
             {
@@ -116,6 +173,9 @@ namespace ZG
 
                 buffers.Clear();
                 buffers.Capacity = math.max(buffers.Capacity, numEvents);
+
+                commands.Clear();
+                commandIndices.Clear();
             }
         }
 
@@ -142,7 +202,7 @@ namespace ZG
 
             public NativeParallelMultiHashMap<uint, NetworkServerMessage>.ParallelWriter buffers;
 
-            public unsafe void Execute(int index)
+            public void Execute(int index)
             {
                 var connection = connections[index];
                 if (NetworkConnection.State.Disconnected == driver.GetConnectionState(connection))
@@ -324,6 +384,8 @@ namespace ZG
             }
         }
 
+        private NetworkDriver __driver;
+
         private NativeBuffer __buffer;
 
         private NativeArray<int> __idCount;
@@ -332,17 +394,21 @@ namespace ZG
 
         private NativeList<NetworkConnection> __connections;
 
+        private NativeList<Command> __commands;
+
         private NativeList<Event> __events;
 
         private NativeList<NetworkServerMessage> __messages;
 
         private NativeHashMap<NetworkConnection, uint> __ids;
 
+        private NativeParallelMultiHashMap<NetworkConnection, int> __commandIndices;
+
         private NativeParallelMultiHashMap<uint, NetworkServerMessage> __buffers;
 
         public bool isCreated => __buffer.isCreated;
 
-        public bool isListening => driver.Listening;
+        public bool isListening => __driver.Listening;
 
         public int connectionCount => __connections.Length;
 
@@ -355,11 +421,6 @@ namespace ZG
 
         public NativeParallelMultiHashMap<uint, NetworkServerMessage>.ReadOnly buffers => __buffers.AsReadOnly();
 
-        public NetworkDriver driver
-        {
-            get;
-        }
-
         public NetworkDriver.Concurrent driverConcurrent
         {
             get;
@@ -367,6 +428,8 @@ namespace ZG
 
         public NetworkServer(AllocatorManager.AllocatorHandle allocator, in NetworkSettings settings)
         {
+            __driver = NetworkDriver.Create(settings);
+
             __buffer = new NativeBuffer(allocator, 1);
 
             __idCount = new NativeArray<int>(1, allocator.ToAllocator, NativeArrayOptions.ClearMemory);
@@ -375,17 +438,19 @@ namespace ZG
 
             __connections = new NativeList<NetworkConnection>(allocator);
 
+            __commands = new NativeList<Command>(allocator);
+
             __events = new NativeList<Event>(allocator);
 
             __messages = new NativeList<NetworkServerMessage>(allocator);
 
             __ids = new NativeHashMap<NetworkConnection, uint>(1, allocator);
 
+            __commandIndices = new NativeParallelMultiHashMap<NetworkConnection, int>(1, allocator);
+
             __buffers = new NativeParallelMultiHashMap<uint, NetworkServerMessage>(1, allocator);
-
-            driver = NetworkDriver.Create(settings);
-
-            driverConcurrent = driver.ToConcurrent();
+            
+            driverConcurrent = __driver.ToConcurrent();
         }
 
         public void Dispose()
@@ -398,17 +463,26 @@ namespace ZG
 
             __connections.Dispose();
 
+            __commands.Dispose();
+
             __events.Dispose();
 
             __messages.Dispose();
 
             __ids.Dispose();
 
+            __commandIndices.Dispose();
+
             __buffers.Dispose();
 
-            driver.Dispose();
+            __driver.Dispose();
         }
 
+        public NetworkConnection.State GetConnectionState(in NetworkConnection connection)
+        {
+            return __driver.GetConnectionState(connection);
+        }
+        
         public void Disconnect(in NetworkConnection connection)
         {
             __connectionsToDisconnects.Add(connection);
@@ -416,9 +490,13 @@ namespace ZG
 
         public void DisconnectAllConnections()
         {
-            var driver = this.driver;
             foreach (var connection in __connections)
-                driver.Disconnect(connection);
+                __driver.Disconnect(connection);
+        }
+
+        public NetworkPipeline CreatePipeline(NetworkPipelineType type)
+        {
+            return __driver.CreatePipeline(type);
         }
 
         public void Listen(ushort port, NetworkFamily family = NetworkFamily.Ipv4)
@@ -438,8 +516,7 @@ namespace ZG
             }
 
             endpoint.Port = port;
-            var driver = this.driver;
-            if (driver.Bind(endpoint) != 0 || driver.Listen() != 0)
+            if (__driver.Bind(endpoint) != 0 || __driver.Listen() != 0)
                 UnityEngine.Debug.LogError($"Failed to bind to port {port}");
         }
 
@@ -453,28 +530,31 @@ namespace ZG
 
         public uint CreateNewID() => (uint)__idCount.Increment(0);
 
-        public StatusCode BeginSendRPC(in NetworkPipeline pipeline, in NetworkConnection connection, uint handle, out DataStreamWriter writer)
+        public StatusCode BeginSendRPC(
+            in NetworkPipeline pipeline, 
+            in NetworkConnection connection, 
+            uint handle, 
+            int messageSize, 
+            out DataStreamWriter writer)
         {
-            var statusCode = BeginSendRPC(pipeline, connection, out writer);
+            var statusCode = BeginSendRPC(pipeline, connection, messageSize + UnsafeUtility.SizeOf<int>(), out writer);
             if (statusCode == StatusCode.Success)
                 writer.WritePackedUInt(handle);
 
             return statusCode;
         }
 
-        public StatusCode BeginSendRPC(in NetworkPipeline pipeline, in NetworkConnection connection, out DataStreamWriter writer)
+        public StatusCode BeginSendRPC(in NetworkPipeline pipeline, in NetworkConnection connection, int messageSize, out DataStreamWriter writer)
         {
             if (__ids.TryGetValue(connection, out uint id))
             {
-                var statusCode = (StatusCode)driver.BeginSend(pipeline, connection, out writer);
-                if (statusCode == StatusCode.Success)
-                {
-                    writer.WritePackedUInt((uint)NetworkMessageType.RPC);
-                    writer.WritePackedUInt(id);
-                    writer.Flush();
-                }
+                writer = __Write(messageSize + (UnsafeUtility.SizeOf<int>() << 1), pipeline, connection);
 
-                return statusCode;
+                writer.WritePackedUInt((uint)NetworkMessageType.RPC);
+                writer.WritePackedUInt(id);
+                writer.Flush();
+
+                return StatusCode.Success;
             }
 
             writer = default;
@@ -482,17 +562,23 @@ namespace ZG
             return StatusCode.NetworkIdMismatch;
         }
 
-        public StatusCode BeginSend(in NetworkPipeline pipeline, in NetworkConnection connection, uint messageType, out DataStreamWriter writer)
+        public StatusCode BeginSend(
+            in NetworkPipeline pipeline, 
+            in NetworkConnection connection, 
+            uint messageType, 
+            int messageSize, 
+            out DataStreamWriter writer)
         {
-            var statusCode = (StatusCode)driver.BeginSend(pipeline, connection, out writer);
-            if (statusCode == StatusCode.Success)
-            {
-                writer.WritePackedUInt(messageType, StreamCompressionModel.Default);
-                writer.WriteUShort(0);
-                //writer.Flush();
-            }
+            writer = __Write(
+                messageSize + UnsafeUtility.SizeOf<int>() + UnsafeUtility.SizeOf<ushort>(), 
+                pipeline, 
+                connection);
+            
+            writer.WritePackedUInt(messageType, StreamCompressionModel.Default);
+            writer.WriteUShort(0);
+            //writer.Flush();
 
-            return statusCode;
+            return StatusCode.Success;
         }
 
         public int EndSend(in DataStreamWriter writer)
@@ -505,9 +591,17 @@ namespace ZG
 
             reader.ReadUShort();
 
-            stream.WriteUShort((ushort)(writer.Length - reader.GetBytesRead()));
+            int length = writer.Length, size = length - reader.GetBytesRead();
+            UnityEngine.Assertions.Assert.IsFalse(size > ushort.MaxValue);
+            stream.WriteUShort((ushort)size);
 
-            return driver.EndSend(writer);
+            int commandIndex = (int)writer.m_SendHandleData - 1;
+            ref var command = ref __commands.ElementAt(commandIndex);
+            __commandIndices.Add(command.connection, commandIndex);
+
+            command.block = command.block.SubBlock(length);
+            
+            return size; //driver.EndSend(writer);
         }
 
         public void GetIDs(ref NativeList<uint> ids)
@@ -534,19 +628,26 @@ namespace ZG
 
         public JobHandle ScheduleUpdate(int innerloopBatchCount, in JobHandle inputDeps)
         {
-            var driver = this.driver;
+            Apply apply;
+            apply.driver = driverConcurrent;
+            apply.connections = __connections.AsArray();
+            apply.commands = __commands.AsArray();
+            apply.commandIndices = __commandIndices;
+            var jobHandle = apply.ScheduleByRef(__connections.Length, innerloopBatchCount, inputDeps);
 
-            var jobHandle = driver.ScheduleUpdate(inputDeps);
+            jobHandle = __driver.ScheduleUpdate(jobHandle);
 
             Resize resize;
-            resize.driver = driver;
+            resize.driver = __driver;
             resize.buffer = __buffer;
             resize.connectionsToDisconnect = __connectionsToDisconnects;
             resize.connections = __connections;
+            resize.commands = __commands;
             resize.events = __events;
             resize.messages = __messages;
             resize.buffers = __buffers;
-            jobHandle = resize.Schedule(jobHandle);
+            resize.commandIndices = __commandIndices;
+            jobHandle = resize.ScheduleByRef(jobHandle);
 
             PopEvents popEvents;
             popEvents.model = StreamCompressionModel.Default;
@@ -561,14 +662,39 @@ namespace ZG
             jobHandle = popEvents.ScheduleByRef(__connections, innerloopBatchCount, jobHandle);
 
             DispatchEvents dispatchEvents;
-            dispatchEvents.driver = driver;
+            dispatchEvents.driver = __driver;
             dispatchEvents.connections = __connections;
             dispatchEvents.events = __events.AsDeferredJobArray();
             dispatchEvents.messages = __messages.AsDeferredJobArray();
             dispatchEvents.ids = __ids;
-            jobHandle = dispatchEvents.Schedule(jobHandle);
+            jobHandle = dispatchEvents.ScheduleByRef(jobHandle);
 
             return jobHandle;
+        }
+
+        private DataStreamWriter __Write(
+            int messageSize, 
+            in NetworkPipeline pipeline, 
+            in NetworkConnection connection)
+        {
+            Command command;
+            command.connection = connection;
+            command.pipeline = pipeline;
+            
+            var buffer = __buffer.writer;
+            command.block = buffer.WriteBlock(messageSize, false);
+
+            __commands.Add(command);
+
+            var writer = new DataStreamWriter(command.block.AsArray<byte>());
+            writer.m_SendHandleData = (IntPtr)__commands.Length;
+
+            return writer;
+        }
+
+        private static void __LogError(StatusCode statusCode)
+        {
+            UnityEngine.Debug.LogError($"Server: {(int)statusCode}");
         }
     }
 
