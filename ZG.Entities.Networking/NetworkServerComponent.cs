@@ -138,12 +138,12 @@ namespace ZG
         internal int _receiveQueueCapacity = 4096;//ReceiveQueueCapacity;
         [SerializeField]
         internal int _sendQueueCapacity = 4096;// SendQueueCapacity;
-        [SerializeField]
-        internal int _windowSize = 32;
-        [SerializeField] 
-        internal int _minimumResendTime = ReliableUtility.DefaultMinimumResendTime;
-        [SerializeField]
-        internal int _maximumResendTime = ReliableUtility.DefaultMaximumResendTime;
+        //[SerializeField]
+        //internal int _windowSize = 32;
+        //[SerializeField] 
+        //internal int _minimumResendTime = ReliableUtility.DefaultMinimumResendTime;
+        //[SerializeField]
+        //internal int _maximumResendTime = ReliableUtility.DefaultMaximumResendTime;
         
         [SerializeField]
         internal int _defaultChannel;
