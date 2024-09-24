@@ -30,17 +30,6 @@ namespace ZG
         void Dispose(uint sourceID, uint destinationID);
     }
 
-    public interface INetworkRPCDriver
-    {
-        NetworkConnection.State GetConnectionState(in NetworkConnection connection);
-
-        StatusCode BeginSend(in NetworkPipeline pipe, in NetworkConnection id, out DataStreamWriter writer, int requiredPayloadSize = 0);
-
-        int EndSend(DataStreamWriter writer);
-
-        void AbortSend(DataStreamWriter writer);
-    }
-
     public struct NetworkRPCManager<T> where T : unmanaged, IEquatable<T>
     {
         public struct NodeIdentity
@@ -292,7 +281,7 @@ namespace ZG
             return __nodeIdentities.GetValuesForKey(value);
         }
 
-        public bool IsActive<TDriver>(uint id, in TDriver driver) where TDriver : INetworkRPCDriver
+        public bool IsActive<TDriver>(uint id, in TDriver driver) where TDriver : INetworkDriver
         {
             if (__GetIdentity(id, out int layer, out var identity, out _))
             {
@@ -311,7 +300,7 @@ namespace ZG
             ref TDriver driver,
             in NetworkPipeline pipeline,
             in TMessage message)
-            where TDriver : INetworkRPCDriver
+            where TDriver : INetworkDriver
             where TMessage : INetworkRPCMessage
         {
             if (!__GetIdentity(id, out int layer, out var identity, out _))
@@ -326,7 +315,7 @@ namespace ZG
             in NetworkConnection connection, 
             in TRegisterMessage registerMessage,
             in TUnregisterMessage unregisterMessage)
-            where TDriver : INetworkRPCDriver
+            where TDriver : INetworkDriver
             where TRegisterMessage : INetworkRPCMessage
             where TUnregisterMessage : INetworkRPCMessage
         {
@@ -486,7 +475,7 @@ namespace ZG
             in T node,
             in NativeGraphEx<T> graph,
             ref NativeHashMap<T, float> nodeDistances)
-            where TDriver : INetworkRPCDriver
+            where TDriver : INetworkDriver
             where TMessage : INetworkRPCMessage
         {
             Identity identity;
@@ -608,7 +597,7 @@ namespace ZG
             uint id,
             ref TDriver driver,
             in TMessage message)
-            where TDriver : INetworkRPCDriver
+            where TDriver : INetworkDriver
             where TMessage : INetworkRPCMessage
         {
             if (!__GetIdentity(id, out int layer, out var identity, out var nodeIterator))
@@ -731,7 +720,7 @@ namespace ZG
             ref NativeHashMap<T, float> nodeDistances, 
             ref NativeHashSet<uint> addIDs, 
             ref NativeHashSet<uint> removeIDs)
-            where TDriver : INetworkRPCDriver
+            where TDriver : INetworkDriver
             where TRegisterMessage : INetworkRPCMessage
             where TUnregisterMessage : INetworkRPCMessage
         {
@@ -1027,7 +1016,7 @@ namespace ZG
             ref TDriver driver,
             in NetworkPipeline pipeline,
             in TMessage message)
-            where TDriver : INetworkRPCDriver
+            where TDriver : INetworkDriver
             where TMessage : INetworkRPCMessage
         {
             if (__nodeIDs.TryGetFirstValue(node, out var nodeID, out var iterator))
@@ -1146,24 +1135,6 @@ namespace ZG
             public int value;
         }
 
-        private struct BufferSegment
-        {
-            public int byteOffset;
-            public int length;
-
-            public NativeArray<TValue> GetArray<TValue, TBuffer>(in TBuffer buffer) 
-                where TValue : struct
-                where TBuffer : IUnsafeBuffer
-            {
-                return length < 0 ? default : buffer.AsArray<TValue>(byteOffset, length);
-            }
-
-            public NativeArray<byte> GetArray<T>(in T buffer) where T : IUnsafeBuffer
-            {
-                return GetArray<byte, T>(buffer);
-            }
-        }
-
         private struct RPCCommand : IComparable<RPCCommand>
         {
             public int type;
@@ -1172,9 +1143,9 @@ namespace ZG
 
             public NetworkPipeline pipeline;
 
-            public BufferSegment bufferSegment;
-            public BufferSegment additionalIDs;
-            public BufferSegment maskIDs;
+            public NetworkBufferSegment bufferSegment;
+            public NetworkBufferSegment additionalIDs;
+            public NetworkBufferSegment maskIDs;
 
             public int CompareTo(RPCCommand other)
             {
@@ -1197,14 +1168,14 @@ namespace ZG
 
             public NetworkPipeline pipeline;
 
-            public BufferSegment bufferSegment;
+            public NetworkBufferSegment bufferSegment;
         }
 
         private struct UnregisterCommand
         {
             public NetworkPipeline pipeline;
 
-            public BufferSegment bufferSegment;
+            public NetworkBufferSegment bufferSegment;
         }
 
         private struct ReconnectCommand
@@ -1214,8 +1185,8 @@ namespace ZG
 
             public NetworkPipeline pipeline;
 
-            public BufferSegment registerBufferSegment;
-            public BufferSegment unregisterBufferSegment;
+            public NetworkBufferSegment registerBufferSegment;
+            public NetworkBufferSegment unregisterBufferSegment;
         }
 
         private struct MoveCommand
@@ -1226,8 +1197,8 @@ namespace ZG
 
             public NetworkPipeline pipeline;
 
-            public BufferSegment registerBufferSegment;
-            public BufferSegment unregisterBufferSegment;
+            public NetworkBufferSegment registerBufferSegment;
+            public NetworkBufferSegment unregisterBufferSegment;
         }
 
         private struct InitCommand
@@ -1237,7 +1208,7 @@ namespace ZG
 
             public NetworkPipeline pipeline;
 
-            public BufferSegment bufferSegment;
+            public NetworkBufferSegment bufferSegment;
         }
 
         private struct Version
@@ -1518,141 +1489,33 @@ namespace ZG
             }
         }
 
-        private struct RPCBufferCommand
-        {
-#if DEBUG
-            public bool isActive;
-#endif
-            public uint id;
-            public NetworkPipeline pipeline;
-            public BufferSegment bufferSegment;
-        }
-
-        private struct RPCBuffer
-        {
-            public UnsafeList<BufferSegment> segments;
-            public UnsafeBuffer value;
-
-            public RPCBuffer(int initialCapacity, AllocatorManager.AllocatorHandle allocator)
-            {
-                segments = new UnsafeList<BufferSegment>(1, allocator, NativeArrayOptions.UninitializedMemory);
-                value = new UnsafeBuffer(initialCapacity, 1, allocator);
-            }
-
-            public void Dispose()
-            {
-                segments.Dispose();
-                value.Dispose();
-            }
-
-            public void Clear()
-            {
-                segments.Clear();
-                value.Reset();
-            }
-
-            public void Apply<T>(
-                in NetworkConnection connection, 
-                in NetworkPipeline pipeline, 
-                ref T driver, 
-                ref DataStreamWriter writer) where T : INetworkRPCDriver
-            {
-                int numSegments = segments.Length, result;
-                StatusCode statusCode;
-                bool isSend;
-                for(int i = 0; i < numSegments; ++i)
-                {
-                    if (writer.IsCreated)
-                        isSend = false;
-                    else
-                    {
-                        statusCode = driver.BeginSend(pipeline, connection, out writer);
-                        if (StatusCode.Success != statusCode)
-                        {
-                            __LogError(statusCode);
-
-                            writer = default;
-
-                            break;
-                        }
-
-                        isSend = true;
-                    }
-
-                    ref readonly var setment = ref segments.ElementAt(i);
-                    if(setment.length > writer.Capacity - writer.Length)
-                    {
-                        if (isSend)
-                        {
-                            driver.AbortSend(writer);
-
-                            writer = default;
-
-                            __LogError(StatusCode.NetworkPacketOverflow);
-
-                            break;
-                        }
-
-                        result = driver.EndSend(writer);
-                        if (result < 0)
-                            __LogError((StatusCode)result);
-
-                        writer = default;
-
-                        --i;
-                    }
-                    else
-                        writer.WriteBytes(setment.GetArray(value));
-                }
-            }
-
-            private void __LogError(StatusCode statusCode)
-            {
-                UnityEngine.Debug.LogError($"RPC: {(int)statusCode}");
-            }
-        }
-
-        private struct RPCBufferInstance
-        {
-            public NetworkPipeline pipeline;
-            public RPCBuffer buffer;
-        }
-
         [BurstCompile]
         private struct Command : IJob
         {
-            private struct Driver : INetworkRPCDriver
+            private struct Driver : INetworkDriver
             {
-                public NetworkDriver.Concurrent instance;
-                public NativeList<RPCBuffer> bufferPool;
-                public NativeList<RPCBufferCommand> commands;
-                public NativeParallelMultiHashMap<uint, RPCBufferInstance> bufferInstances;
-                public NativeHashMap<NetworkConnection, uint> ids;
+                private NativeHashMap<NetworkConnection, uint> __ids;
+                private NetworkDriverBuffer<uint> __instance;
 
-                public bool TryGetBuffer(
-                    uint id,
-                    in NetworkPipeline pipeline,
-                    out RPCBufferInstance bufferInstance,
-                    out NativeParallelMultiHashMapIterator<uint> iterator)
+                public Driver(
+                    in NativeHashMap<NetworkConnection, uint> ids, 
+                    ref NetworkDriver.Concurrent instance,
+                    ref NativeList<NetworkBuffer> bufferPool,
+                    ref NativeList<NetworkDriverBuffer<uint>.Command> commands,
+                    ref NativeParallelMultiHashMap<uint, NetworkBufferInstance> bufferInstances)
                 {
-                    if (bufferInstances.TryGetFirstValue(id, out bufferInstance, out iterator))
-                    {
-                        do
-                        {
-                            if (bufferInstance.pipeline == pipeline)
-                            {
-                                return true;
-                            }
+                    __ids = ids;
 
-                        } while (bufferInstances.TryGetNextValue(out bufferInstance, ref iterator));
-                    }
-
-                    return false;
+                    __instance = new NetworkDriverBuffer<uint>(
+                        ref instance, 
+                        ref bufferPool, 
+                        ref commands,
+                        ref bufferInstances);
                 }
 
                 public NetworkConnection.State GetConnectionState(in NetworkConnection connection)
                 {
-                    return instance.GetConnectionState(connection);
+                    return __instance.GetConnectionState(connection);
                 }
 
                 public StatusCode BeginSend(
@@ -1661,123 +1524,24 @@ namespace ZG
                     out DataStreamWriter writer,
                     int requiredPayloadSize = 0)
                 {
-                    if (!ids.TryGetValue(connection, out uint id))
+                    if (!__ids.TryGetValue(connection, out uint id))
                     {
                         writer = default;
 
                         return StatusCode.NetworkIdMismatch;
                     }
 
-                    RPCBufferCommand command;
-                    command.bufferSegment.length = instance.PayloadCapacity(pipeline);
-                    if(requiredPayloadSize > 0)
-                    {
-                        if (requiredPayloadSize > command.bufferSegment.length)
-                        {
-                            writer = default;
-
-                            return StatusCode.NetworkPacketOverflow;
-                        }
-
-                        command.bufferSegment.length = requiredPayloadSize;
-                    }
-
-                    if (TryGetBuffer(id, pipeline, out var bufferInstance, out var iterator))
-                        bufferInstances.Remove(iterator);
-                    else
-                    {
-                        bufferInstance.pipeline = pipeline;
-
-                        int bufferPoolLength = bufferPool.Length;
-                        if (bufferPoolLength > 0)
-                        {
-                            int bufferIndex = bufferPoolLength - 1;
-
-                            bufferInstance.buffer = bufferPool[bufferIndex];
-                            bufferInstance.buffer.Clear();
-
-                            bufferPool.ResizeUninitialized(bufferIndex);
-                        }
-                        else
-                            bufferInstance.buffer = new RPCBuffer(command.bufferSegment.length, Allocator.Persistent);
-                    }
-
-                    command.bufferSegment.byteOffset = bufferInstance.buffer.value.length;
-                    command.pipeline = pipeline;
-                    command.id = id;
-
-#if DEBUG
-                    command.isActive = true;
-#endif
-
-                    commands.Add(command);
-
-                    writer = DataStreamUtility.CreateWriter(
-                        bufferInstance.buffer.value.writer.WriteBlock(command.bufferSegment.length, false).AsArray<byte>(),
-                        (IntPtr)commands.Length);
-
-                    bufferInstances.Add(id, bufferInstance);
-
-                    return StatusCode.Success;
+                    return __instance.BeginSend(pipeline, id, out writer, requiredPayloadSize);
                 }
 
                 public int EndSend(DataStreamWriter writer)
                 {
-                    int commandIndex = (int)writer.GetSendHandleData() - 1;
-                    var command = commands[commandIndex];
-
-#if DEBUG
-                    UnityEngine.Assertions.Assert.IsTrue(command.isActive);
-
-                    command.isActive = false;
-                    commands[commandIndex] = command;
-
-                    writer.SetSendHandleData(IntPtr.Zero);
-#endif
-
-                    if (!TryGetBuffer(command.id, command.pipeline, out var bufferInstance, out var iterator))
-                        return (int)StatusCode.NetworkSendHandleInvalid;
-
-                    int length = writer.Length;
-
-#if DEBUG
-                    if (length > NetworkParameterConstants.MTU)
-                        Debug.LogWarning("Long Stream.");
-#endif
-
-                    UnityEngine.Assertions.Assert.AreEqual(bufferInstance.buffer.value.length, command.bufferSegment.byteOffset + command.bufferSegment.length);
-
-                    bufferInstance.buffer.value.length = command.bufferSegment.byteOffset + length;
-
-                    command.bufferSegment.length = length;
-
-                    bufferInstance.buffer.segments.Add(command.bufferSegment);
-
-                    bufferInstances.SetValue(bufferInstance, iterator);
-
-                    return length;
+                    return __instance.EndSend(writer);
                 }
 
                 public void AbortSend(DataStreamWriter writer)
                 {
-                    int commandIndex = (int)writer.GetSendHandleData() - 1;
-                    var command = commands[commandIndex];
-
-#if DEBUG
-                    command.isActive = false;
-                    commands[commandIndex] = command;
-
-                    writer.SetSendHandleData(IntPtr.Zero);
-#endif
-
-                    if (!TryGetBuffer(command.id, command.pipeline, out var bufferInstance, out var iterator))
-                        return;
-
-                    UnityEngine.Assertions.Assert.AreEqual(bufferInstance.buffer.value.length, command.bufferSegment.byteOffset + command.bufferSegment.length);
-
-                    bufferInstance.buffer.value.length = command.bufferSegment.byteOffset;
-
-                    bufferInstances.SetValue(bufferInstance, iterator);
+                    __instance.AbortSend(writer);
                 }
             }
 
@@ -1804,8 +1568,8 @@ namespace ZG
             public NativeList<RegisterCommand> registerCommands;
             public NativeList<UnregisterCommand> unregisterCommands;
 
-            public NativeList<RPCBufferCommand> rpcBufferCommands;
-            public NativeList<RPCBuffer> rpcBufferPool;
+            public NativeList<NetworkDriverBuffer<uint>.Command> bufferCommands;
+            public NativeList<NetworkBuffer> bufferPool;
 
             public NativeHashMap<uint, CommandIndex> commandIndices;
             public NativeHashMap<uint, MoveCommand> moveCommands;
@@ -1817,9 +1581,9 @@ namespace ZG
 
             public NativeParallelMultiHashMap<uint, Version> versions;
 
-            public NativeParallelMultiHashMap<uint, RPCBufferInstance> rpcBufferInstanceInputs;
+            public NativeParallelMultiHashMap<uint, NetworkBufferInstance> bufferInstanceInputs;
 
-            public NativeParallelMultiHashMap<uint, RPCBufferInstance> rpcBufferInstanceOutputs;
+            public NativeParallelMultiHashMap<uint, NetworkBufferInstance> bufferInstanceOutputs;
 
             public NativeParallelMultiHashMap<uint, InitEvent> initEvents;
 
@@ -1835,36 +1599,36 @@ namespace ZG
 
             public void BeginRPC()
             {
-                rpcBufferCommands.Clear();
+                bufferCommands.Clear();
 
-                UnityEngine.Assertions.Assert.IsFalse(rpcBufferCount[0] > rpcBufferPool.Length);
+                UnityEngine.Assertions.Assert.IsFalse(rpcBufferCount[0] > bufferPool.Length);
 
-                rpcBufferPool.ResizeUninitialized(rpcBufferCount[0]);
+                bufferPool.ResizeUninitialized(rpcBufferCount[0]);
 
-                foreach (var rpcBufferInstance in rpcBufferInstanceInputs)
-                    rpcBufferPool.Add(rpcBufferInstance.Value.buffer);
+                foreach (var bufferInstance in bufferInstanceInputs)
+                    bufferPool.Add(bufferInstance.Value.buffer);
 
-                rpcBufferInstanceInputs.Clear();
+                bufferInstanceInputs.Clear();
 
-                foreach (var rpcBufferInstance in rpcBufferInstanceOutputs)
-                    rpcBufferInstanceInputs.Add(rpcBufferInstance.Key, rpcBufferInstance.Value);
+                foreach (var bufferInstance in bufferInstanceOutputs)
+                    bufferInstanceInputs.Add(bufferInstance.Key, bufferInstance.Value);
 
-                rpcBufferInstanceOutputs.Clear();
+                bufferInstanceOutputs.Clear();
             }
 
             public void EndRPC()
             {
                 rpcIDs.Clear();
-                using (var ids = rpcBufferInstanceInputs.GetKeyArray(Allocator.Temp))
+                using (var ids = bufferInstanceInputs.GetKeyArray(Allocator.Temp))
                 {
                     int count = ids.ConvertToUniqueArray();
                     rpcIDs.AddRange(ids.GetSubArray(0, count));
                 }
 
-                rpcBufferCount[0] = rpcBufferPool.Length;
+                rpcBufferCount[0] = bufferPool.Length;
 
 #if DEBUG
-                foreach (var bufferCommand in rpcBufferCommands)
+                foreach (var bufferCommand in bufferCommands)
                     UnityEngine.Assertions.Assert.IsFalse(bufferCommand.isActive);
 #endif
             }
@@ -1876,12 +1640,7 @@ namespace ZG
                 activeEvents.Clear();
                 //initEvents.Clear();
 
-                Driver driver;
-                driver.instance = this.driver;
-                driver.bufferPool = rpcBufferPool;
-                driver.commands = rpcBufferCommands;
-                driver.bufferInstances = rpcBufferInstanceInputs;
-                driver.ids = ids;
+                var driver = new Driver(ids, ref this.driver, ref bufferPool, ref bufferCommands, ref bufferInstanceInputs);
 
                 RegisterMessage registerMessage;
                 registerMessage.model = model;
@@ -2432,7 +2191,7 @@ namespace ZG
 
             public NativeHashMap<uint, int> minCommandByteOffsets;
 
-            public NativeParallelMultiHashMap<uint, RPCBufferInstance> bufferInstanceResults;
+            public NativeParallelMultiHashMap<uint, NetworkBufferInstance> bufferInstanceResults;
 
             public NativeParallelMultiHashMap<uint, RPCCommand> destinations;
 
@@ -2543,247 +2302,6 @@ namespace ZG
         [BurstCompile]
         private struct CommandParallel : IJobParallelForDefer
         {
-            private struct Command
-            {
-#if DEBUG
-                public bool isActive;
-#endif
-                public BufferSegment bufferSegment;
-                public NetworkPipeline pipeline;
-                public IntPtr ptr;
-            }
-
-            private struct Driver : INetworkRPCDriver
-            {
-                public NetworkDriver.Concurrent instance;
-                public NativeArray<RPCBuffer> bufferPool;
-                public NativeArray<int> bufferPoolCount;
-                public UnsafeList<Command> commands;
-                public UnsafeHashMap<NetworkPipeline, RPCBuffer> buffers;
-
-                public Driver(ref NetworkDriver.Concurrent instance, ref NativeArray<int> bufferPoolCount, in NativeArray<RPCBuffer> bufferPool)
-                {
-                    this.instance = instance;
-                    this.bufferPool = bufferPool;
-                    this.bufferPoolCount = bufferPoolCount;
-                    commands = default;
-                    buffers = default;
-                }
-
-                public void Dispose()
-                {
-                    if (commands.IsCreated)
-                        commands.Dispose();
-
-                    if (buffers.IsCreated)
-                        buffers.Dispose();
-                }
-
-                public void Apply(uint id, ref NativeParallelMultiHashMap<uint, RPCBufferInstance>.ParallelWriter bufferInstances)
-                {
-                    if (buffers.IsCreated)
-                    {
-                        RPCBufferInstance bufferInstance;
-                        foreach(var buffer in buffers)
-                        {
-                            bufferInstance.pipeline = buffer.Key;
-                            bufferInstance.buffer = buffer.Value;
-                            bufferInstances.Add(id, bufferInstance);
-                        }
-
-#if DEBUG
-                        foreach (var command in commands)
-                            UnityEngine.Assertions.Assert.IsFalse(command.isActive);
-#endif
-                    }
-                }
-
-                public RPCBuffer GetOrCreate(in NetworkPipeline pipeline, int capacity)
-                {
-                    if(!buffers.IsCreated)
-                        buffers = new UnsafeHashMap<NetworkPipeline, RPCBuffer>(1, Allocator.Temp);
-
-                    if (!buffers.TryGetValue(pipeline, out var buffer))
-                    {
-                        int bufferIndex = bufferPoolCount.Decrement(0);
-                        if (bufferIndex < 0)
-                        {
-                            bufferPoolCount.Increment(0);
-
-                            buffer = new RPCBuffer(capacity, Allocator.Persistent);
-                        }
-                        else
-                        {
-                            buffer = bufferPool[bufferIndex];
-
-                            buffer.Clear();
-                        }
-                    }
-
-                    return buffer;
-                }
-
-                public NetworkConnection.State GetConnectionState(in NetworkConnection connection)
-                {
-                    return instance.GetConnectionState(connection);
-                }
-
-                public StatusCode BeginSend(
-                    in NetworkPipeline pipeline,
-                    in NetworkConnection connection,
-                    out DataStreamWriter writer,
-                    int requiredPayloadSize = 0)
-                {
-                    Command command;
-#if DEBUG
-                    command.isActive = true;
-#endif
-                    command.pipeline = pipeline;
-
-                    if (!buffers.IsCreated)
-                    {
-                        var statusCode = (StatusCode)instance.BeginSend(pipeline, connection, out writer, requiredPayloadSize);
-                        switch (statusCode)
-                        {
-                            case StatusCode.Success:
-                                command.bufferSegment = default;
-                                command.ptr = writer.GetSendHandleData();
-
-                                if (!commands.IsCreated)
-                                    commands = new UnsafeList<Command>(1, Allocator.Temp);
-
-                                commands.Add(command);
-
-                                writer.SetSendHandleData((IntPtr)commands.Length);
-
-                                return StatusCode.Success;
-                            case StatusCode.NetworkSendQueueFull:
-                                break;
-                            default:
-                                return statusCode;
-                        }
-                    }
-
-                    command.bufferSegment.length = instance.PayloadCapacity(pipeline);
-
-                    if (requiredPayloadSize > command.bufferSegment.length)
-                    {
-                        writer = default;
-
-                        return StatusCode.NetworkPacketOverflow;
-                    }
-                    else if (requiredPayloadSize > 0)
-                        command.bufferSegment.length = requiredPayloadSize;
-
-                    var buffer = GetOrCreate(pipeline, command.bufferSegment.length);
-
-                    command.bufferSegment.byteOffset = buffer.value.length;
-
-                    command.ptr = IntPtr.Zero;
-
-                    if (!commands.IsCreated)
-                        commands = new UnsafeList<Command>(1, Allocator.Temp);
-
-                    commands.Add(command);
-
-                    writer = DataStreamUtility.CreateWriter(
-                        buffer.value.writer.WriteBlock(command.bufferSegment.length, false).AsArray<byte>(),
-                        (IntPtr)commands.Length);
-
-                    buffers[pipeline] = buffer;
-
-                    return StatusCode.Success;
-                }
-
-                public int EndSend(DataStreamWriter writer)
-                {
-                    int length = writer.Length, 
-                        commandIndex = (int)writer.GetSendHandleData() - 1;
-                    var command = commands[commandIndex];
-#if DEBUG
-                    if (length > NetworkParameterConstants.MTU)
-                        Debug.LogWarning("Long Stream.");
-
-                    UnityEngine.Assertions.Assert.IsTrue(command.isActive);
-
-                    command.isActive = false;
-
-                    commands[commandIndex] = command;
-#endif
-
-                    RPCBuffer buffer;
-                    if (command.ptr == IntPtr.Zero)
-                    {
-#if DEBUG
-                        writer.SetSendHandleData(IntPtr.Zero);
-#endif
-
-                        if (!buffers.TryGetValue(command.pipeline, out buffer))
-                            return (int)StatusCode.NetworkSendHandleInvalid;
-
-                        int position = command.bufferSegment.byteOffset + length;
-                        if (buffer.value.length == command.bufferSegment.byteOffset + command.bufferSegment.length)
-                            buffer.value.length = position;
-                    }
-                    else
-                    {
-                        writer.SetSendHandleData(command.ptr);
-
-                        int result = instance.EndSend(writer);
-
-#if DEBUG
-                        writer.SetSendHandleData(IntPtr.Zero);
-#endif
-
-                        if (result >= 0)
-                            return result;
-
-                        if (StatusCode.NetworkSendQueueFull != (StatusCode)result)
-                            return result;
-
-                        buffer = GetOrCreate(command.pipeline, length);
-
-                        command.bufferSegment.byteOffset = buffer.value.position;
-
-                        buffer.value.writer.WriteBlock(length, false).AsArray<byte>().CopyFrom(writer.AsNativeArray());
-                    }
-
-                    command.bufferSegment.length = length;
-                    buffer.segments.Add(command.bufferSegment);
-
-                    buffers[command.pipeline] = buffer;
-
-                    return length;
-                }
-
-                public void AbortSend(DataStreamWriter writer)
-                {
-                    int length = writer.Length,
-                        commandIndex = (int)writer.GetSendHandleData() - 1;
-                    var command = commands[commandIndex];
-                    RPCBuffer buffer;
-                    if (command.ptr == IntPtr.Zero)
-                    {
-                        if (!buffers.TryGetValue(command.pipeline, out buffer))
-                            return;
-
-                        int position = command.bufferSegment.byteOffset + length;
-                        if (buffer.value.length == command.bufferSegment.byteOffset + command.bufferSegment.length)
-                        {
-                            buffer.value.length = position;
-
-                            buffers[command.pipeline] = buffer;
-                        }
-                    }
-                    else
-                    {
-                        writer.SetSendHandleData(command.ptr);
-
-                        instance.AbortSend(writer);
-                    }
-                }
-            }
-
             public StreamCompressionModel model;
 
             public NetworkRPCManager<int>.ReadOnly manager;
@@ -2794,7 +2312,7 @@ namespace ZG
             public NativeBuffer buffer;
 
             [ReadOnly]
-            public NativeArray<RPCBuffer> rpcBufferPool;
+            public NativeArray<NetworkBuffer> rpcBufferPool;
 
             [ReadOnly]
             public NativeArray<uint> rpcIDs;
@@ -2812,9 +2330,9 @@ namespace ZG
             public NativeParallelMultiHashMap<uint, RPCCommand> commands;
 
             [ReadOnly]
-            public NativeParallelMultiHashMap<uint, RPCBufferInstance> rpcBufferInstanceInputs;
+            public NativeParallelMultiHashMap<uint, NetworkBufferInstance> rpcBufferInstanceInputs;
 
-            public NativeParallelMultiHashMap<uint, RPCBufferInstance>.ParallelWriter rpcBufferInstanceOutputs;
+            public NativeParallelMultiHashMap<uint, NetworkBufferInstance>.ParallelWriter rpcBufferInstanceOutputs;
 
             [NativeDisableParallelForRestriction]
             public NativeArray<int> rpcBufferPoolCount;
@@ -2826,7 +2344,7 @@ namespace ZG
                 if (!connection.IsCreated)
                     return;
 
-                var driver = new Driver(ref this.driver, ref rpcBufferPoolCount, rpcBufferPool);
+                var driver = new NetworkDriverWrapper(ref this.driver, ref rpcBufferPoolCount, rpcBufferPool);
 
                 UnsafeHashMap<NetworkPipeline, DataStreamWriter> writers = default;
                 __CommandMain(id, connection, ref driver, ref writers);
@@ -2851,7 +2369,7 @@ namespace ZG
                 driver.Dispose();
             }
 
-            private void __CommandMain(uint id, in NetworkConnection connection, ref Driver driver, ref UnsafeHashMap<NetworkPipeline, DataStreamWriter> writers)
+            private void __CommandMain(uint id, in NetworkConnection connection, ref NetworkDriverWrapper driver, ref UnsafeHashMap<NetworkPipeline, DataStreamWriter> writers)
             {
                 if (rpcBufferInstanceInputs.TryGetFirstValue(id, out var bufferInstance, out var iterator))
                 {
@@ -2875,7 +2393,7 @@ namespace ZG
                 }
             }
 
-            private void __CommandInit(uint id, in NetworkConnection connection, ref Driver driver, ref UnsafeHashMap<NetworkPipeline, DataStreamWriter> writers)
+            private void __CommandInit(uint id, in NetworkConnection connection, ref NetworkDriverWrapper driver, ref UnsafeHashMap<NetworkPipeline, DataStreamWriter> writers)
             {
                 if (initCommands.TryGetFirstValue(id, out var initCommand, out var iterator))
                 {
@@ -2953,7 +2471,7 @@ namespace ZG
                 }
             }
 
-            private void __CommandRPC(uint id, in NetworkConnection connection, ref Driver driver, ref UnsafeHashMap<NetworkPipeline, DataStreamWriter> writers)
+            private void __CommandRPC(uint id, in NetworkConnection connection, ref NetworkDriverWrapper driver, ref UnsafeHashMap<NetworkPipeline, DataStreamWriter> writers)
             {
                 NativeArray<RPCCommand> commands = default;
                 int commandIndex = 0;
@@ -3115,9 +2633,9 @@ namespace ZG
         private NativeList<RegisterCommand> __registerCommands;
         private NativeList<UnregisterCommand> __unregisterCommands;
 
-        private NativeList<RPCBufferCommand> __rpcBufferCommands;
+        private NativeList<NetworkDriverBuffer<uint>.Command> __bufferCommands;
 
-        private NativeList<RPCBuffer> __rpcBufferPool;
+        private NativeList<NetworkBuffer> __bufferPool;
 
         private NativeHashMap<uint, CommandIndex> __commandIndices;
 
@@ -3141,9 +2659,9 @@ namespace ZG
 
         private NativeParallelMultiHashMap<uint, RPCCommand> __destinationRPCCommands;
 
-        private NativeParallelMultiHashMap<uint, RPCBufferInstance> __rpcBufferInstanceInputs;
+        private NativeParallelMultiHashMap<uint, NetworkBufferInstance> __rpcBufferInstanceInputs;
 
-        private NativeParallelMultiHashMap<uint, RPCBufferInstance> __rpcBufferInstanceOutputs;
+        private NativeParallelMultiHashMap<uint, NetworkBufferInstance> __rpcBufferInstanceOutputs;
 
         private NativeHashSet<uint> __idsToActive;
 
@@ -3177,9 +2695,9 @@ namespace ZG
             __registerCommands = new NativeList<RegisterCommand>(allocator);
             __unregisterCommands = new NativeList<UnregisterCommand>(allocator);
 
-            __rpcBufferCommands = new NativeList<RPCBufferCommand>(allocator);
+            __bufferCommands = new NativeList<NetworkDriverBuffer<uint>.Command>(allocator);
 
-            __rpcBufferPool = new NativeList<RPCBuffer>(allocator);
+            __bufferPool = new NativeList<NetworkBuffer>(allocator);
 
             __commandIndices = new NativeHashMap<uint, CommandIndex>(1, allocator);
 
@@ -3203,8 +2721,8 @@ namespace ZG
 
             __destinationRPCCommands = new NativeParallelMultiHashMap<uint, RPCCommand>(1, allocator);
 
-            __rpcBufferInstanceInputs = new NativeParallelMultiHashMap<uint, RPCBufferInstance>(1, allocator);
-            __rpcBufferInstanceOutputs = new NativeParallelMultiHashMap<uint, RPCBufferInstance>(1, allocator);
+            __rpcBufferInstanceInputs = new NativeParallelMultiHashMap<uint, NetworkBufferInstance>(1, allocator);
+            __rpcBufferInstanceOutputs = new NativeParallelMultiHashMap<uint, NetworkBufferInstance>(1, allocator);
 
             __idsToActive = new NativeHashSet<uint>(1, allocator);
 
@@ -3222,12 +2740,12 @@ namespace ZG
             __rpcIDs.Dispose();
             __registerCommands.Dispose();
             __unregisterCommands.Dispose();
-            __rpcBufferCommands.Dispose();
+            __bufferCommands.Dispose();
 
-            foreach (var rpcBuffer in __rpcBufferPool)
-                rpcBuffer.Dispose();
+            foreach (var buffer in __bufferPool)
+                buffer.Dispose();
 
-            __rpcBufferPool.Dispose();
+            __bufferPool.Dispose();
 
             __commandIndices.Dispose();
             __moveCommands.Dispose();
@@ -3566,16 +3084,16 @@ namespace ZG
             command.activeEvents = __activeEvents;
             command.registerCommands = __registerCommands;
             command.unregisterCommands = __unregisterCommands;
-            command.rpcBufferCommands = __rpcBufferCommands;
-            command.rpcBufferPool = __rpcBufferPool;
+            command.bufferCommands = __bufferCommands;
+            command.bufferPool = __bufferPool;
             command.commandIndices = __commandIndices;
             command.moveCommands = __moveCommands;
             command.reconnectCommands = __reconnectCommands;
             command.types = __types;
             command.nodeDistances = __nodeDistances;
             command.versions = __versions;
-            command.rpcBufferInstanceInputs = __rpcBufferInstanceInputs;
-            command.rpcBufferInstanceOutputs = __rpcBufferInstanceOutputs;
+            command.bufferInstanceInputs = __rpcBufferInstanceInputs;
+            command.bufferInstanceOutputs = __rpcBufferInstanceOutputs;
             command.initEvents = __initEvents;
             command.idsToInit = __idsToInit;
             command.idsToActive = __idsToActive;
@@ -3583,7 +3101,7 @@ namespace ZG
             command.removeIDs = __removeIDs;
             command.manager = manager;
 
-            return command.Schedule(inputDeps);
+            return command.ScheduleByRef(inputDeps);
         }
 
         public JobHandle ScheduleCommandRPC(
@@ -3630,7 +3148,7 @@ namespace ZG
             command.manager = manager;
             command.driver = driver;
             command.buffer = __buffer;
-            command.rpcBufferPool = __rpcBufferPool.AsDeferredJobArray();
+            command.rpcBufferPool = __bufferPool.AsDeferredJobArray();
             command.rpcIDs = __rpcIDs.AsDeferredJobArray();
             command.versions = __versions;
             command.initCommands = __initCommands;

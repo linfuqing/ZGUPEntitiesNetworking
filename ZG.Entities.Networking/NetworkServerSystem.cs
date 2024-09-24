@@ -11,6 +11,546 @@ using Unity.Collections.LowLevel.Unsafe;
 
 namespace ZG
 {
+    public interface INetworkDriver
+    {
+        NetworkConnection.State GetConnectionState(in NetworkConnection connection);
+
+        StatusCode BeginSend(in NetworkPipeline pipe, in NetworkConnection id, out DataStreamWriter writer, int requiredPayloadSize = 0);
+
+        int EndSend(DataStreamWriter writer);
+
+        void AbortSend(DataStreamWriter writer);
+    }
+
+    public struct NetworkDriverWrapper : INetworkDriver
+    {
+        private struct Command
+        {
+#if DEBUG
+            public bool isActive;
+#endif
+            public NetworkBufferSegment bufferSegment;
+            public NetworkPipeline pipeline;
+            public IntPtr ptr;
+        }
+
+        private NetworkDriver.Concurrent __instance;
+        private NativeArray<NetworkBuffer> __bufferPool;
+        private NativeArray<int> __bufferPoolCount;
+        private UnsafeList<Command> __commands;
+        private UnsafeHashMap<NetworkPipeline, NetworkBuffer> __buffers;
+
+        public NetworkDriverWrapper(
+            ref NetworkDriver.Concurrent instance, 
+            ref NativeArray<int> bufferPoolCount,
+            in NativeArray<NetworkBuffer> bufferPool)
+        {
+            __instance = instance;
+            __bufferPool = bufferPool;
+            __bufferPoolCount = bufferPoolCount;
+            __commands = default;
+            __buffers = default;
+        }
+
+        public void Dispose()
+        {
+            if (__commands.IsCreated)
+                __commands.Dispose();
+
+            if (__buffers.IsCreated)
+                __buffers.Dispose();
+        }
+
+        public void Apply<T>(in T id,
+            ref NativeParallelMultiHashMap<T, NetworkBufferInstance>.ParallelWriter bufferInstances) where T : unmanaged, IEquatable<T>
+        {
+            if (__buffers.IsCreated)
+            {
+                NetworkBufferInstance bufferInstance;
+                foreach (var buffer in __buffers)
+                {
+                    bufferInstance.pipeline = buffer.Key;
+                    bufferInstance.buffer = buffer.Value;
+                    bufferInstances.Add(id, bufferInstance);
+                }
+
+#if DEBUG
+                foreach (var command in __commands)
+                    UnityEngine.Assertions.Assert.IsFalse(command.isActive);
+#endif
+            }
+        }
+
+        public NetworkBuffer GetOrCreate(in NetworkPipeline pipeline, int capacity)
+        {
+            if (!__buffers.IsCreated)
+                __buffers = new UnsafeHashMap<NetworkPipeline, NetworkBuffer>(1, Allocator.Temp);
+
+            if (!__buffers.TryGetValue(pipeline, out var buffer))
+            {
+                int bufferIndex = __bufferPoolCount.Decrement(0);
+                if (bufferIndex < 0)
+                {
+                    __bufferPoolCount.Increment(0);
+
+                    buffer = new NetworkBuffer(capacity, Allocator.Persistent);
+                }
+                else
+                {
+                    buffer = __bufferPool[bufferIndex];
+
+                    buffer.Clear();
+                }
+            }
+
+            return buffer;
+        }
+
+        public NetworkConnection.State GetConnectionState(in NetworkConnection connection)
+        {
+            return __instance.GetConnectionState(connection);
+        }
+
+        public StatusCode BeginSend(
+            in NetworkPipeline pipeline,
+            in NetworkConnection connection,
+            out DataStreamWriter writer,
+            int requiredPayloadSize = 0)
+        {
+            Command command;
+#if DEBUG
+            command.isActive = true;
+#endif
+            command.pipeline = pipeline;
+
+            if (!__buffers.IsCreated)
+            {
+                var statusCode = (StatusCode)__instance.BeginSend(pipeline, connection, out writer, requiredPayloadSize);
+                switch (statusCode)
+                {
+                    case StatusCode.Success:
+                        command.bufferSegment = default;
+                        command.ptr = writer.GetSendHandleData();
+
+                        if (!__commands.IsCreated)
+                            __commands = new UnsafeList<Command>(1, Allocator.Temp);
+
+                        __commands.Add(command);
+
+                        writer.SetSendHandleData((IntPtr)__commands.Length);
+
+                        return StatusCode.Success;
+                    case StatusCode.NetworkSendQueueFull:
+                        break;
+                    default:
+                        return statusCode;
+                }
+            }
+
+            command.bufferSegment.length = __instance.PayloadCapacity(pipeline);
+
+            if (requiredPayloadSize > command.bufferSegment.length)
+            {
+                writer = default;
+
+                return StatusCode.NetworkPacketOverflow;
+            }
+            else if (requiredPayloadSize > 0)
+                command.bufferSegment.length = requiredPayloadSize;
+
+            var buffer = GetOrCreate(pipeline, command.bufferSegment.length);
+
+            command.bufferSegment.byteOffset = buffer.value.length;
+
+            command.ptr = IntPtr.Zero;
+
+            if (!__commands.IsCreated)
+                __commands = new UnsafeList<Command>(1, Allocator.Temp);
+
+            __commands.Add(command);
+
+            writer = DataStreamUtility.CreateWriter(
+                buffer.value.writer.WriteBlock(command.bufferSegment.length, false).AsArray<byte>(),
+                (IntPtr)__commands.Length);
+
+            __buffers[pipeline] = buffer;
+
+            return StatusCode.Success;
+        }
+
+        public int EndSend(DataStreamWriter writer)
+        {
+            int length = writer.Length,
+                commandIndex = (int)writer.GetSendHandleData() - 1;
+            var command = __commands[commandIndex];
+#if DEBUG
+            if (length > NetworkParameterConstants.MTU)
+                UnityEngine.Debug.LogError("Long Stream.");
+
+            UnityEngine.Assertions.Assert.IsTrue(command.isActive);
+
+            command.isActive = false;
+
+            __commands[commandIndex] = command;
+#endif
+
+            NetworkBuffer buffer;
+            if (command.ptr == IntPtr.Zero)
+            {
+#if DEBUG
+                writer.SetSendHandleData(IntPtr.Zero);
+#endif
+
+                if (!__buffers.TryGetValue(command.pipeline, out buffer))
+                    return (int)StatusCode.NetworkSendHandleInvalid;
+
+                int position = command.bufferSegment.byteOffset + length;
+                if (buffer.value.length == command.bufferSegment.byteOffset + command.bufferSegment.length)
+                    buffer.value.length = position;
+            }
+            else
+            {
+                writer.SetSendHandleData(command.ptr);
+
+                int result = __instance.EndSend(writer);
+
+#if DEBUG
+                writer.SetSendHandleData(IntPtr.Zero);
+#endif
+
+                if (result >= 0)
+                    return result;
+
+                if (StatusCode.NetworkSendQueueFull != (StatusCode)result)
+                    return result;
+
+                buffer = GetOrCreate(command.pipeline, length);
+
+                command.bufferSegment.byteOffset = buffer.value.position;
+
+                buffer.value.writer.WriteBlock(length, false).AsArray<byte>().CopyFrom(writer.AsNativeArray());
+            }
+
+            command.bufferSegment.length = length;
+            buffer.segments.Add(command.bufferSegment);
+
+            __buffers[command.pipeline] = buffer;
+
+            return length;
+        }
+
+        public void AbortSend(DataStreamWriter writer)
+        {
+            int length = writer.Length,
+                commandIndex = (int)writer.GetSendHandleData() - 1;
+            var command = __commands[commandIndex];
+            NetworkBuffer buffer;
+            if (command.ptr == IntPtr.Zero)
+            {
+                if (!__buffers.TryGetValue(command.pipeline, out buffer))
+                    return;
+
+                int position = command.bufferSegment.byteOffset + length;
+                if (buffer.value.length == command.bufferSegment.byteOffset + command.bufferSegment.length)
+                {
+                    buffer.value.length = position;
+
+                    __buffers[command.pipeline] = buffer;
+                }
+            }
+            else
+            {
+                writer.SetSendHandleData(command.ptr);
+
+                __instance.AbortSend(writer);
+            }
+        }
+    }
+
+    public struct NetworkBufferSegment
+    {
+        public int byteOffset;
+        public int length;
+
+        public NativeArray<TValue> GetArray<TValue, TBuffer>(in TBuffer buffer) 
+            where TValue : struct
+            where TBuffer : IUnsafeBuffer
+        {
+            return length < 0 ? default : buffer.AsArray<TValue>(byteOffset, length);
+        }
+
+        public NativeArray<byte> GetArray<T>(in T buffer) where T : IUnsafeBuffer
+        {
+            return GetArray<byte, T>(buffer);
+        }
+    }
+
+    public struct NetworkBuffer
+    {
+        public UnsafeList<NetworkBufferSegment> segments;
+        public UnsafeBuffer value;
+
+        public NetworkBuffer(int initialCapacity, AllocatorManager.AllocatorHandle allocator)
+        {
+            segments = new UnsafeList<NetworkBufferSegment>(1, allocator, NativeArrayOptions.UninitializedMemory);
+            value = new UnsafeBuffer(initialCapacity, 1, allocator);
+        }
+
+        public void Dispose()
+        {
+            segments.Dispose();
+            value.Dispose();
+        }
+
+        public void Clear()
+        {
+            segments.Clear();
+            value.Reset();
+        }
+
+        public void Apply<T>(
+            in NetworkConnection connection,
+            in NetworkPipeline pipeline,
+            ref T driver,
+            ref DataStreamWriter writer) where T : INetworkDriver
+        {
+            int numSegments = segments.Length, result;
+            StatusCode statusCode;
+            bool isSend;
+            for (int i = 0; i < numSegments; ++i)
+            {
+                if (writer.IsCreated)
+                    isSend = false;
+                else
+                {
+                    statusCode = driver.BeginSend(pipeline, connection, out writer);
+                    if (StatusCode.Success != statusCode)
+                    {
+                        LogError(statusCode);
+
+                        writer = default;
+
+                        break;
+                    }
+
+                    isSend = true;
+                }
+
+                ref readonly var segment = ref segments.ElementAt(i);
+                if (segment.length > writer.Capacity - writer.Length)
+                {
+                    if (isSend)
+                    {
+                        driver.AbortSend(writer);
+
+                        writer = default;
+
+                        LogError(StatusCode.NetworkPacketOverflow);
+
+                        break;
+                    }
+
+                    result = driver.EndSend(writer);
+                    if (result < 0)
+                        LogError((StatusCode)result);
+
+                    writer = default;
+
+                    --i;
+                }
+                else
+                    writer.WriteBytes(segment.GetArray(value));
+            }
+        }
+
+        public static void LogError(StatusCode statusCode)
+        {
+            UnityEngine.Debug.LogError($"NetworkBuffer: {(int)statusCode}");
+        }
+    }
+
+    public struct NetworkBufferInstance
+    {
+        public NetworkPipeline pipeline;
+        public NetworkBuffer buffer;
+    }
+
+    public struct NetworkDriverBuffer<T> where T : unmanaged, IEquatable<T>
+    {
+        public struct Command
+        {
+#if DEBUG
+            public bool isActive;
+#endif
+            public T connection;
+            public NetworkPipeline pipeline;
+            public NetworkBufferSegment bufferSegment;
+        }
+
+        private NetworkDriver.Concurrent __instance;
+        private NativeList<NetworkBuffer> __bufferPool;
+        private NativeList<Command> __commands;
+        private NativeParallelMultiHashMap<T, NetworkBufferInstance> __bufferInstances;
+
+        public NetworkDriverBuffer(
+            ref NetworkDriver.Concurrent instance,
+            ref NativeList<NetworkBuffer> bufferPool,
+            ref NativeList<Command> commands,
+            ref NativeParallelMultiHashMap<T, NetworkBufferInstance> bufferInstances)
+        {
+            __instance = instance;
+            __bufferPool = bufferPool;
+            __commands = commands;
+            __bufferInstances = bufferInstances;
+        }
+
+        public bool TryGetBuffer(
+            in T connection,
+            in NetworkPipeline pipeline,
+            out NetworkBufferInstance bufferInstance,
+            out NativeParallelMultiHashMapIterator<T> iterator)
+        {
+            if (__bufferInstances.TryGetFirstValue(connection, out bufferInstance, out iterator))
+            {
+                do
+                {
+                    if (bufferInstance.pipeline == pipeline)
+                    {
+                        return true;
+                    }
+
+                } while (__bufferInstances.TryGetNextValue(out bufferInstance, ref iterator));
+            }
+
+            return false;
+        }
+
+        public NetworkConnection.State GetConnectionState(in NetworkConnection connection)
+        {
+            return __instance.GetConnectionState(connection);
+        }
+
+        public StatusCode BeginSend(
+            in NetworkPipeline pipeline,
+            in T connection,
+            out DataStreamWriter writer,
+            int requiredPayloadSize = 0)
+        {
+            Command command;
+            command.bufferSegment.length = __instance.PayloadCapacity(pipeline);
+            if (requiredPayloadSize > 0)
+            {
+                if (requiredPayloadSize > command.bufferSegment.length)
+                {
+                    writer = default;
+
+                    return StatusCode.NetworkPacketOverflow;
+                }
+
+                command.bufferSegment.length = requiredPayloadSize;
+            }
+
+            if (TryGetBuffer(connection, pipeline, out var bufferInstance, out var iterator))
+                __bufferInstances.Remove(iterator);
+            else
+            {
+                bufferInstance.pipeline = pipeline;
+
+                int bufferPoolLength = __bufferPool.Length;
+                if (bufferPoolLength > 0)
+                {
+                    int bufferIndex = bufferPoolLength - 1;
+
+                    bufferInstance.buffer = __bufferPool[bufferIndex];
+                    bufferInstance.buffer.Clear();
+
+                    __bufferPool.ResizeUninitialized(bufferIndex);
+                }
+                else
+                    bufferInstance.buffer = new NetworkBuffer(command.bufferSegment.length, Allocator.Persistent);
+            }
+
+            command.bufferSegment.byteOffset = bufferInstance.buffer.value.length;
+            command.pipeline = pipeline;
+            command.connection = connection;
+
+#if DEBUG
+            command.isActive = true;
+#endif
+
+            __commands.Add(command);
+
+            writer = DataStreamUtility.CreateWriter(
+                bufferInstance.buffer.value.writer.WriteBlock(command.bufferSegment.length, false).AsArray<byte>(),
+                (IntPtr)__commands.Length);
+
+            __bufferInstances.Add(connection, bufferInstance);
+
+            return StatusCode.Success;
+        }
+
+        public int EndSend(DataStreamWriter writer)
+        {
+            int commandIndex = (int)writer.GetSendHandleData() - 1;
+            var command = __commands[commandIndex];
+
+#if DEBUG
+            UnityEngine.Assertions.Assert.IsTrue(command.isActive);
+
+            command.isActive = false;
+            __commands[commandIndex] = command;
+
+            writer.SetSendHandleData(IntPtr.Zero);
+#endif
+
+            if (!TryGetBuffer(command.connection, command.pipeline, out var bufferInstance, out var iterator))
+                return (int)StatusCode.NetworkSendHandleInvalid;
+
+            int length = writer.Length;
+
+#if DEBUG
+            if (length > NetworkParameterConstants.MTU)
+                UnityEngine.Debug.LogError("Long Stream.");
+#endif
+
+            UnityEngine.Assertions.Assert.AreEqual(bufferInstance.buffer.value.length,
+                command.bufferSegment.byteOffset + command.bufferSegment.length);
+
+            bufferInstance.buffer.value.length = command.bufferSegment.byteOffset + length;
+
+            command.bufferSegment.length = length;
+
+            bufferInstance.buffer.segments.Add(command.bufferSegment);
+
+            __bufferInstances.SetValue(bufferInstance, iterator);
+
+            return length;
+        }
+
+        public void AbortSend(DataStreamWriter writer)
+        {
+            int commandIndex = (int)writer.GetSendHandleData() - 1;
+            var command = __commands[commandIndex];
+
+#if DEBUG
+            command.isActive = false;
+            __commands[commandIndex] = command;
+
+            writer.SetSendHandleData(IntPtr.Zero);
+#endif
+
+            if (!TryGetBuffer(command.connection, command.pipeline, out var bufferInstance, out var iterator))
+                return;
+
+            UnityEngine.Assertions.Assert.AreEqual(bufferInstance.buffer.value.length,
+                command.bufferSegment.byteOffset + command.bufferSegment.length);
+
+            bufferInstance.buffer.value.length = command.bufferSegment.byteOffset;
+
+            __bufferInstances.SetValue(bufferInstance, iterator);
+        }
+    }
+
     public struct NetworkServerMessage : System.IComparable<NetworkServerMessage>
     {
         public uint type;
@@ -69,23 +609,6 @@ namespace ZG
 
     public struct NetworkServer
     {
-        private struct Command
-        {
-            public NetworkConnection connection;
-            public NetworkPipeline pipeline;
-            public UnsafeBlock block;
-
-            public int Send(ref NetworkDriver.Concurrent driver)
-            {
-                int result = driver.BeginSend(pipeline, connection, out var writer);
-                if (result < 0)
-                    return result;
-
-                writer.WriteBytes(block.AsArray<byte>());
-                return driver.EndSend(writer);
-            }
-        }
-        
         private struct Event
         {
             public NetworkMessageType messageType;
@@ -101,11 +624,16 @@ namespace ZG
             [ReadOnly]
             public NativeArray<NetworkConnection> connections;
 
-            [ReadOnly] 
-            public NativeArray<Command> commands;
-            
             [ReadOnly]
-            public NativeParallelMultiHashMap<NetworkConnection, int> commandIndices;
+            public NativeArray<NetworkBuffer> bufferPool;
+
+            [ReadOnly]
+            public NativeParallelMultiHashMap<NetworkConnection, NetworkBufferInstance> bufferInstanceInputs;
+            
+            public NativeParallelMultiHashMap<NetworkConnection, NetworkBufferInstance>.ParallelWriter bufferInstanceOutputs;
+
+            [NativeDisableParallelForRestriction]
+            public NativeArray<int> bufferPoolCount;
 
             public void Execute(int index)
             {
@@ -113,26 +641,29 @@ namespace ZG
                 /*if (NetworkConnection.State.Connected != driver.GetConnectionState(connection))
                     return;*/
                 
-                if (!this.commandIndices.TryGetFirstValue(connection, out var commandIndex, out var iterator))
+                if (!bufferInstanceInputs.TryGetFirstValue(connection, out var bufferInstance, out var iterator))
                     return;
 
-                var commandIndices = new NativeList<int>(Allocator.Temp);
-                commandIndices.Add(commandIndex);
+                var driver = new NetworkDriverWrapper(ref this.driver, ref bufferPoolCount, bufferPool);
 
+                DataStreamWriter writer = default;
                 do
                 {
-                    commandIndices.Add(commandIndex);
-                } while (this.commandIndices.TryGetNextValue(out commandIndex, ref iterator));
-                
-                commandIndices.Sort();
+                    bufferInstance.buffer.Apply(connection, bufferInstance.pipeline, ref driver, ref writer);
 
-                int result;
-                foreach (var temp in commandIndices)
-                {
-                    result = commands[temp].Send(ref driver);
-                    if (result < 0)
-                        __LogError((StatusCode)result);
-                }
+                    if (writer.IsCreated)
+                    {
+                        int result = driver.EndSend(writer);
+                        if (result < 0)
+                            NetworkBuffer.LogError((StatusCode)result);
+
+                        writer = default;
+                    }
+                } while (bufferInstanceInputs.TryGetNextValue(out bufferInstance, ref iterator));
+                
+                driver.Apply(connection, ref bufferInstanceOutputs);
+                
+                driver.Dispose();
             }
         }
 
@@ -142,22 +673,29 @@ namespace ZG
             public NetworkDriver driver;
             public NativeBuffer buffer;
 
+            [ReadOnly]
+            public NativeArray<int> bufferPoolCount;
+
+            public NativeList<NetworkBuffer> bufferPool;
+
             public NativeList<NetworkConnection> connectionsToDisconnect;
 
             public NativeList<NetworkConnection> connections;
 
             public NativeList<Event> events;
 
-            public NativeList<Command> commands;
-
             public NativeList<NetworkServerMessage> messages;
 
             public NativeParallelMultiHashMap<uint, NetworkServerMessage> buffers;
 
-            public NativeParallelMultiHashMap<NetworkConnection, int> commandIndices;
+            public NativeParallelMultiHashMap<NetworkConnection, NetworkBufferInstance> bufferInstanceInputs;
+            
+            public NativeParallelMultiHashMap<NetworkConnection, NetworkBufferInstance> bufferInstanceOutputs;
 
             public void Execute()
             {
+                bufferPool.ResizeUninitialized(bufferPoolCount[0]);
+                
                 foreach (var connectionToDisconnect in connectionsToDisconnect)
                     driver.Disconnect(connectionToDisconnect);
 
@@ -183,8 +721,12 @@ namespace ZG
                 buffers.Clear();
                 buffers.Capacity = math.max(buffers.Capacity, numEvents);
 
-                commands.Clear();
-                commandIndices.Clear();
+                bufferInstanceInputs.Clear();
+                
+                foreach (var bufferInstance in bufferInstanceOutputs)
+                    bufferInstanceInputs.Add(bufferInstance.Key, bufferInstance.Value);
+
+                bufferInstanceOutputs.Clear();
             }
         }
 
@@ -399,11 +941,15 @@ namespace ZG
 
         private NativeArray<int> __idCount;
         
+        private NativeArray<int> __bufferPoolCount;
+
+        private NativeList<NetworkBuffer> __bufferPool;
+
         private NativeList<NetworkConnection> __connectionsToDisconnects;
 
         private NativeList<NetworkConnection> __connections;
 
-        private NativeList<Command> __commands;
+        private NativeList<NetworkDriverBuffer<NetworkConnection>.Command> __commands;
 
         private NativeList<Event> __events;
 
@@ -411,9 +957,11 @@ namespace ZG
 
         private NativeHashMap<NetworkConnection, uint> __ids;
 
-        private NativeParallelMultiHashMap<NetworkConnection, int> __commandIndices;
-
         private NativeParallelMultiHashMap<uint, NetworkServerMessage> __buffers;
+
+        private NativeParallelMultiHashMap<NetworkConnection, NetworkBufferInstance> __bufferInstanceInputs;
+            
+        private NativeParallelMultiHashMap<NetworkConnection, NetworkBufferInstance> __bufferInstanceOutputs;
 
         public bool isCreated => __buffer.isCreated;
 
@@ -435,6 +983,15 @@ namespace ZG
             get;
         }
 
+        public NetworkDriverBuffer<NetworkConnection> driver
+        {
+            get
+            {
+                var instance = driverConcurrent;
+                return new NetworkDriverBuffer<NetworkConnection>(ref instance, ref __bufferPool, ref __commands, ref __bufferInstanceInputs);
+            }
+        }
+
         public NetworkServer(AllocatorManager.AllocatorHandle allocator, in NetworkSettings settings)
         {
             __driver = NetworkDriver.Create(settings);
@@ -443,11 +1000,15 @@ namespace ZG
 
             __idCount = new NativeArray<int>(1, allocator.ToAllocator, NativeArrayOptions.ClearMemory);
 
+            __bufferPoolCount = new NativeArray<int>(1, Allocator.Persistent, NativeArrayOptions.ClearMemory);
+
+            __bufferPool = new NativeList<NetworkBuffer>(Allocator.Persistent);
+
             __connectionsToDisconnects = new NativeList<NetworkConnection>(allocator);
 
             __connections = new NativeList<NetworkConnection>(allocator);
 
-            __commands = new NativeList<Command>(allocator);
+            __commands = new NativeList<NetworkDriverBuffer<NetworkConnection>.Command>(allocator);
 
             __events = new NativeList<Event>(allocator);
 
@@ -455,18 +1016,29 @@ namespace ZG
 
             __ids = new NativeHashMap<NetworkConnection, uint>(1, allocator);
 
-            __commandIndices = new NativeParallelMultiHashMap<NetworkConnection, int>(1, allocator);
-
             __buffers = new NativeParallelMultiHashMap<uint, NetworkServerMessage>(1, allocator);
             
+            __bufferInstanceInputs = new NativeParallelMultiHashMap<NetworkConnection, NetworkBufferInstance>(1, Allocator.Persistent);
+            
+            __bufferInstanceOutputs = new NativeParallelMultiHashMap<NetworkConnection, NetworkBufferInstance>(1, Allocator.Persistent);
+
             driverConcurrent = __driver.ToConcurrent();
         }
 
         public void Dispose()
         {
+            __driver.Dispose();
+            
             __buffer.Dispose();
 
             __idCount.Dispose();
+
+            __bufferPoolCount.Dispose();
+
+            foreach (var buffer in __bufferPool)
+                buffer.value.Dispose();
+            
+            __bufferPool.Dispose();
 
             __connectionsToDisconnects.Dispose();
 
@@ -480,11 +1052,17 @@ namespace ZG
 
             __ids.Dispose();
 
-            __commandIndices.Dispose();
-
             __buffers.Dispose();
 
-            __driver.Dispose();
+            foreach (var bufferInstance in __bufferInstanceInputs)
+                bufferInstance.Value.buffer.Dispose();
+
+            __bufferInstanceInputs.Dispose();
+            
+            foreach (var bufferInstance in __bufferInstanceOutputs)
+                bufferInstance.Value.buffer.Dispose();
+
+            __bufferInstanceOutputs.Dispose();
         }
 
         public NetworkConnection.State GetConnectionState(in NetworkConnection connection)
@@ -543,27 +1121,42 @@ namespace ZG
             in NetworkPipeline pipeline, 
             in NetworkConnection connection, 
             uint handle, 
-            int messageSize, 
-            out DataStreamWriter writer)
+            out DataStreamWriter writer, 
+            int requiredPayloadSize = 0)
         {
-            var statusCode = BeginSendRPC(pipeline, connection, messageSize + UnsafeUtility.SizeOf<int>(), out writer);
+            var statusCode = BeginSendRPC(
+                pipeline, 
+                connection, 
+                out writer, 
+                requiredPayloadSize == 0 ? 0 : requiredPayloadSize + UnsafeUtility.SizeOf<int>());
             if (statusCode == StatusCode.Success)
                 writer.WritePackedUInt(handle);
 
             return statusCode;
         }
 
-        public StatusCode BeginSendRPC(in NetworkPipeline pipeline, in NetworkConnection connection, int messageSize, out DataStreamWriter writer)
+        public StatusCode BeginSendRPC(
+            in NetworkPipeline pipeline, 
+            in NetworkConnection connection, 
+            out DataStreamWriter writer, 
+            int requiredPayloadSize = 0)
         {
             if (__ids.TryGetValue(connection, out uint id))
             {
-                writer = __Write(messageSize + (UnsafeUtility.SizeOf<int>() << 1), pipeline, connection);
+                var statusCode = driver.BeginSend(
+                    pipeline, 
+                    connection, 
+                    out writer, 
+                    requiredPayloadSize == 0 ? 0 : requiredPayloadSize + (UnsafeUtility.SizeOf<int>() << 1));
+                if (StatusCode.Success == statusCode)
+                {
+                    var model = StreamCompressionModel.Default;
+                    writer.WritePackedUInt((uint)NetworkMessageType.RPC, model);
+                    writer.WritePackedUInt(id, model);
+                    writer.Flush();
+                }
 
-                writer.WritePackedUInt((uint)NetworkMessageType.RPC);
-                writer.WritePackedUInt(id);
-                writer.Flush();
-
-                return StatusCode.Success;
+                return statusCode;
             }
 
             writer = default;
@@ -575,19 +1168,22 @@ namespace ZG
             in NetworkPipeline pipeline, 
             in NetworkConnection connection, 
             uint messageType, 
-            int messageSize, 
-            out DataStreamWriter writer)
+            out DataStreamWriter writer, 
+            int requiredPayloadSize = 0)
         {
-            writer = __Write(
-                messageSize + UnsafeUtility.SizeOf<int>() + UnsafeUtility.SizeOf<ushort>(), 
+            var statusCode = driver.BeginSend(
                 pipeline, 
-                connection);
-            
-            writer.WritePackedUInt(messageType, StreamCompressionModel.Default);
-            writer.WriteUShort(0);
-            //writer.Flush();
+                connection, 
+                out writer, 
+                requiredPayloadSize == 0 ? 0 : requiredPayloadSize + UnsafeUtility.SizeOf<int>() + UnsafeUtility.SizeOf<ushort>());
+            if (StatusCode.Success == statusCode)
+            {
+                writer.WritePackedUInt(messageType, StreamCompressionModel.Default);
+                writer.WriteUShort(0);
+                //writer.Flush();
+            }
 
-            return StatusCode.Success;
+            return statusCode;
         }
 
         public int EndSend(in DataStreamWriter writer)
@@ -595,22 +1191,27 @@ namespace ZG
             var mode = StreamCompressionModel.Default;
             var array = writer.AsNativeArray();
             var reader = new DataStreamReader(array);
-            var stream = new DataStreamWriter(array);
-            stream.WritePackedUInt(reader.ReadPackedUInt(mode), mode);
+            uint messageType = reader.ReadPackedUInt(mode);
+            switch (messageType)
+            {
+                case (uint)NetworkMessageType.RPC:
+                case (uint)NetworkMessageType.Register:
+                case (uint)NetworkMessageType.Unregister:
+                    break;
+                default:
+                    var stream = new DataStreamWriter(array);
+                    stream.WritePackedUInt(messageType, mode);
 
-            reader.ReadUShort();
+                    reader.ReadUShort();
 
-            int length = writer.Length, size = length - reader.GetBytesRead();
-            UnityEngine.Assertions.Assert.IsFalse(size > ushort.MaxValue);
-            stream.WriteUShort((ushort)size);
+                    int length = writer.Length, size = length - reader.GetBytesRead();
+                    UnityEngine.Assertions.Assert.IsFalse(size > ushort.MaxValue);
+                    stream.WriteUShort((ushort)size);
 
-            int commandIndex = (int)writer.m_SendHandleData - 1;
-            ref var command = ref __commands.ElementAt(commandIndex);
-            __commandIndices.Add(command.connection, commandIndex);
+                    break;
+            }
 
-            command.block = command.block.SubBlock(length);
-            
-            return size; //driver.EndSend(writer);
+            return driver.EndSend(writer);
         }
 
         public void GetIDs(ref NativeList<uint> ids)
@@ -637,11 +1238,17 @@ namespace ZG
 
         public JobHandle ScheduleUpdate(int innerloopBatchCount, in JobHandle inputDeps)
         {
+            __commands.Clear();
+            
+            __bufferPoolCount[0] = __bufferPool.Length;
+            
             Apply apply;
             apply.driver = driverConcurrent;
             apply.connections = __connections.AsArray();
-            apply.commands = __commands.AsArray();
-            apply.commandIndices = __commandIndices;
+            apply.bufferPool = __bufferPool.AsArray();
+            apply.bufferInstanceInputs = __bufferInstanceInputs;
+            apply.bufferInstanceOutputs = __bufferInstanceOutputs.AsParallelWriter();
+            apply.bufferPoolCount = __bufferPoolCount;
             var jobHandle = apply.ScheduleByRef(__connections.Length, innerloopBatchCount, inputDeps);
 
             jobHandle = __driver.ScheduleUpdate(jobHandle);
@@ -649,13 +1256,15 @@ namespace ZG
             Resize resize;
             resize.driver = __driver;
             resize.buffer = __buffer;
+            resize.bufferPoolCount = __bufferPoolCount;
+            resize.bufferPool = __bufferPool;
             resize.connectionsToDisconnect = __connectionsToDisconnects;
             resize.connections = __connections;
-            resize.commands = __commands;
             resize.events = __events;
             resize.messages = __messages;
             resize.buffers = __buffers;
-            resize.commandIndices = __commandIndices;
+            resize.bufferInstanceInputs = __bufferInstanceInputs;
+            resize.bufferInstanceOutputs = __bufferInstanceOutputs;
             jobHandle = resize.ScheduleByRef(jobHandle);
 
             PopEvents popEvents;
@@ -679,31 +1288,6 @@ namespace ZG
             jobHandle = dispatchEvents.ScheduleByRef(jobHandle);
 
             return jobHandle;
-        }
-
-        private DataStreamWriter __Write(
-            int messageSize, 
-            in NetworkPipeline pipeline, 
-            in NetworkConnection connection)
-        {
-            Command command;
-            command.connection = connection;
-            command.pipeline = pipeline;
-            
-            var buffer = __buffer.writer;
-            command.block = buffer.WriteBlock(messageSize, false);
-
-            __commands.Add(command);
-
-            var writer = new DataStreamWriter(command.block.AsArray<byte>());
-            writer.m_SendHandleData = (IntPtr)__commands.Length;
-
-            return writer;
-        }
-
-        private static void __LogError(StatusCode statusCode)
-        {
-            UnityEngine.Debug.LogError($"Server: {(int)statusCode}");
         }
     }
 

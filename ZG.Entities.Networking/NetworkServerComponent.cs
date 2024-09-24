@@ -4,6 +4,7 @@ using Unity.Entities;
 using Unity.Collections;
 using Unity.Networking.Transport;
 using Unity.Networking.Transport.Error;
+using Unity.Networking.Transport.Utilities;
 using UnityEngine;
 using NetworkReader = Unity.Collections.DataStreamReader;
 using NetworkWriter = Unity.Collections.DataStreamWriter;
@@ -69,7 +70,7 @@ namespace ZG
 
         bool Send(int channel, uint messageType, in NetworkConnection connection);
 
-        bool BeginSend(int channel, int messageSize, uint messageType, in NetworkConnection connection, out NetworkWriter writer);
+        bool BeginSend(int channel, uint messageType, in NetworkConnection connection, out NetworkWriter writer);
 
         int EndSend(NetworkWriter writer);
 
@@ -137,7 +138,13 @@ namespace ZG
         internal int _receiveQueueCapacity = 4096;//ReceiveQueueCapacity;
         [SerializeField]
         internal int _sendQueueCapacity = 4096;// SendQueueCapacity;
-
+        [SerializeField]
+        internal int _windowSize = 32;
+        [SerializeField] 
+        internal int _minimumResendTime = ReliableUtility.DefaultMinimumResendTime;
+        [SerializeField]
+        internal int _maximumResendTime = ReliableUtility.DefaultMaximumResendTime;
+        
         [SerializeField]
         internal int _defaultChannel;
 
@@ -210,6 +217,8 @@ namespace ZG
                         _fixedFrameTimeMS,
                         _receiveQueueCapacity,
                         _sendQueueCapacity);
+
+                    //settings.WithReliableStageParameters(_windowSize, _minimumResendTime, _maximumResendTime);
 
                     __manager = NetworkServerSystem.CreateManager(world.Unmanaged, settings);
                 }
@@ -622,7 +631,6 @@ namespace ZG
 
         public bool BeginSend(
             int channel, 
-            int messageSize, 
             uint messageType, 
             in NetworkConnection connection, 
             out NetworkWriter writer)
@@ -631,7 +639,6 @@ namespace ZG
                 channels[channel].pipeline, 
                 connection, 
                 messageType, 
-                messageSize, 
                 out writer);
             if (StatusCode.Success == statusCode)
                 return true;
@@ -654,7 +661,7 @@ namespace ZG
 
         public bool Send(int channel, uint messageType, in NetworkConnection connection)
         {
-            if (BeginSend(channel, 0, messageType, connection, out var writer))
+            if (BeginSend(channel, messageType, connection, out var writer))
             {
                 int result = EndSend(writer);
                 if (result >= 0)
@@ -666,7 +673,7 @@ namespace ZG
 
         public bool Send<T>(int channel, uint messageType, in NetworkConnection connection, T message) where T : INetworkMessage
         {
-            if (BeginSend(channel, message.size, messageType, connection, out var writer))
+            if (BeginSend(channel, messageType, connection, out var writer))
             {
                 message.Serialize(ref writer);
 
