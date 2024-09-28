@@ -1,3 +1,4 @@
+using System;
 using Unity.Burst;
 using Unity.Burst.Intrinsics;
 using Unity.Collections;
@@ -8,8 +9,16 @@ using Unity.Networking.Transport;
 
 namespace ZG
 {
+    [Flags]
+    public enum NetworkServerEntityComponentFlag
+    { 
+        Packed = 0x01, 
+    }
+
     public struct NetworkServerEntityComponent : IBufferElementData
     {
+        public NetworkServerEntityComponentFlag flag;
+        
         public uint handle;
         public int channel;
         public int rpcType;
@@ -260,6 +269,8 @@ namespace ZG
         [BurstCompile]
         private struct Send : IJob
         {
+            public StreamCompressionModel model;
+            
             [ReadOnly] 
             public NativeArray<NetworkServerEntityChannel> channels;
             
@@ -288,7 +299,7 @@ namespace ZG
                 int value;
                 NetworkServerEntityChannel channel;
                 NativeArray<uint> ids;
-                //DynamicBuffer<NetworkServerEntityBuffer> buffer;
+                NativeArray<byte> buffer;
                 NetworkServerEntityBufferRange bufferRange;
                 NetworkServerEntityComponent component;
                 DataStreamWriter stream;
@@ -302,8 +313,16 @@ namespace ZG
                     stream.WritePackedUInt(component.handle);
                     
                     bufferRange = bufferRanges[result.entity][result.componentIndex];
-                    stream.WriteBytes(buffers[result.entity].AsNativeArray().Reinterpret<byte>()
-                        .GetSubArray(bufferRange.offset, bufferRange.length));
+                    buffer = buffers[result.entity].AsNativeArray().Reinterpret<byte>().GetSubArray(bufferRange.offset, bufferRange.length);
+                    if ((component.flag & NetworkServerEntityComponentFlag.Packed) ==
+                        NetworkServerEntityComponentFlag.Packed &&
+                        (bufferRange.length & 0x3) == 0)
+                    {
+                        foreach (var packedValue in buffer.Reinterpret<uint>(1))
+                            stream.WritePackedUInt(packedValue, model);
+                    }
+                    else
+                        stream.WriteBytes(buffer);
 
                     ids = this.ids[result.entity].AsNativeArray().Reinterpret<uint>();
                     value = rpcCommander.EndCommandRPC(
@@ -441,6 +460,7 @@ namespace ZG
             var controller = __controllerGroup.GetSingleton<NetworkRPCController>();
             
             Send send;
+            send.model = StreamCompressionModel.Default;
             send.channels = state.EntityManager.GetBuffer<NetworkServerEntityChannel>(state.SystemHandle, true).AsNativeArray();
             send.identities = __identities.UpdateAsRef(ref state);
             send.components = __components.UpdateAsRef(ref state);

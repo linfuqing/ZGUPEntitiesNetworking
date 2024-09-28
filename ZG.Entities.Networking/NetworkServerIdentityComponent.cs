@@ -16,13 +16,16 @@ namespace ZG
         public int channel;
         public uint handle;
 
+        public NetworkServerEntityComponentFlag flag;
+
         public NetworkServerComponentAttribute(
             uint handle,
             Type componentType,
             Type additionalIDComponentType,
             Type maskIDComponentType,
             int channel = 0,
-            int rpcType = (int)NetworkRPCType.Normal)
+            int rpcType = (int)NetworkRPCType.Normal, 
+            NetworkServerEntityComponentFlag flag = 0)
         {
             this.componentType = componentType;
             this.additionalIDComponentType = additionalIDComponentType;
@@ -30,6 +33,7 @@ namespace ZG
             this.rpcType = rpcType;
             this.channel = channel;
             this.handle = handle;
+            this.flag = flag;
         }
     }
 
@@ -66,6 +70,7 @@ namespace ZG
                     return false;
 
                 NetworkServerEntityComponent entityComponent;
+                entityComponent.flag = x.flag;
                 entityComponent.componentTypeIndex = NetworkServerEntitySystem.GetOrCreateComponentTypeIndex(
                     world,
                     TypeManager.GetTypeIndex(x.componentType));
