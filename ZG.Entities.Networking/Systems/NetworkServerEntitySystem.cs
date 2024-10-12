@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 using Unity.Burst;
 using Unity.Burst.Intrinsics;
 using Unity.Collections;
@@ -13,6 +14,7 @@ namespace ZG
     public enum NetworkServerEntityComponentFlag
     { 
         Packed = 0x01, 
+        SendAlways = 0x02
     }
 
     public struct NetworkServerEntityComponent : IBufferElementData
@@ -41,6 +43,7 @@ namespace ZG
         public int length;
     }
 
+    [StructLayout(LayoutKind.Sequential, Size = 1)]
     public struct NetworkServerEntityBuffer : IBufferElementData
     {
         public byte value;
@@ -100,6 +103,7 @@ namespace ZG
                 ids.Clear();
                 
                 void* source, destination;
+                bool isSendAlways;
                 int typeSize, bufferLength;
                 TypeIndex typeIndex;
                 NetworkServerEntityComponent component;
@@ -113,6 +117,9 @@ namespace ZG
                     ref var componentType = ref componentTypes[component.componentTypeIndex];
                     if(!chunk.Has(ref componentType))
                         continue;
+
+                    isSendAlways = (component.flag & NetworkServerEntityComponentFlag.SendAlways) ==
+                                   NetworkServerEntityComponentFlag.SendAlways;
                     
                     typeIndex = componentType.GetTypeIndex();
                     typeSize = TypeManager.GetTypeInfo(typeIndex).TypeSize;
@@ -121,6 +128,9 @@ namespace ZG
                     {
                         var bufferAccessor = chunk.GetUntypedBufferAccessor(ref componentType);
                         source = bufferAccessor.GetUnsafeReadOnlyPtrAndLength(index, out bufferLength);
+
+                        /*if (bufferLength > 0)
+                            UnityEngine.Debug.LogError("fuck!");*/
                     }
                     else
                     {
@@ -136,7 +146,9 @@ namespace ZG
                     buffer = buffers[index];
 
                     ref var bufferRange = ref bufferRanges.ElementAt(i);
-                    if (bufferRange.length < 1 || bufferRange.length + bufferRange.offset > buffer.Length)
+                    if (!isSendAlways && 
+                        bufferLength > 0 && 
+                        (bufferRange.length < 1 || bufferRange.length + bufferRange.offset > buffer.Length))
                     {
                         bufferRange.offset = buffer.Length;
                         bufferRange.length = bufferLength;
@@ -148,25 +160,40 @@ namespace ZG
                     {
                         if (bufferLength == bufferRange.length)
                         {
+                            if (bufferLength < 1)
+                                continue;
+                            
                             destination = UnsafeUtility.AddressOf(ref buffer.ElementAt(bufferRange.offset));
 
                             if (UnsafeUtility.MemCmp(source, destination, bufferLength) == 0)
-                                continue;
+                            {
+                                if (isSendAlways)
+                                    destination = null;
+                                else
+                                    continue;
+                            }
                         }
                         else
                         {
-                            buffer.RemoveRange(bufferRange.offset, bufferRange.length);
-
-                            for (j = 0; j < numComponents; ++j)
+                            if (bufferRange.length > 0)
                             {
-                                ref var temp = ref bufferRanges.ElementAt(j);
+                                buffer.RemoveRange(bufferRange.offset, bufferRange.length);
 
-                                if (temp.offset > bufferRange.offset)
-                                    temp.offset -= bufferRange.length;
+                                for (j = 0; j < numComponents; ++j)
+                                {
+                                    ref var temp = ref bufferRanges.ElementAt(j);
+
+                                    if (temp.offset > bufferRange.offset)
+                                        temp.offset -= bufferRange.length;
+                                }
                             }
-                            
+
                             bufferRange.offset = buffer.Length;
                             bufferRange.length = bufferLength;
+                            
+                            if(bufferLength < 1)
+                                continue;
+
                             buffer.ResizeUninitialized(bufferRange.offset + bufferRange.length);
 
                             destination = UnsafeUtility.AddressOf(ref buffer.ElementAt(bufferRange.offset));
@@ -178,6 +205,9 @@ namespace ZG
                         result.maskIDCount = __GetIDCount(component.maskIDComponentTypeIndex, index, ref ids);
 
                         results.Enqueue(result);
+                        
+                        if(destination == null)
+                            continue;
                     }
 
                     UnsafeUtility.MemCpy(destination, source, bufferLength);
@@ -199,7 +229,7 @@ namespace ZG
                         if (length > 0)
                         {
                             int typeSize = TypeManager.GetTypeInfo(typeIndex).TypeSize;
-                            if (typeSize == UnsafeUtility.SizeOf<int>())
+                            if (typeSize == UnsafeUtility.SizeOf<NetworkServerEntityID>())
                                 ids.AddRange(CollectionHelper.ConvertExistingDataToNativeArray<NetworkServerEntityID>(ptr, length, Allocator.None, true));
                             else
                             {
@@ -341,7 +371,7 @@ namespace ZG
         private BurstCompatibleTypeArrayReadOnly __componentTypes;
 
         private EntityQuery __group;
-        private EntityQuery __managerGroup;
+        //private EntityQuery __managerGroup;
         private EntityQuery __controllerGroup;
 
         private EntityTypeHandle __entityType;
@@ -409,7 +439,7 @@ namespace ZG
                     .WithOptions(EntityQueryOptions.IncludeDisabledEntities)
                     .Build(ref state);
 
-            __managerGroup = NetworkServerManager.GetEntityQuery(ref state);
+            //__managerGroup = NetworkServerManager.GetEntityQuery(ref state);
             __controllerGroup = NetworkRPCController.GetEntityQuery(ref state);
 
             __entityType = state.GetEntityTypeHandle();

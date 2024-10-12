@@ -51,8 +51,8 @@ namespace ZG
 
                 if (result)
                 {
-                    entities.capacity = math.max(entities.capacity, count);
                     entities.Clear();
+                    entities.capacity = math.max(entities.capacity, count);
                 }
             }
         }
@@ -158,13 +158,17 @@ namespace ZG
             var entities = this.entities;
             ref var lookupJobManager = ref entities.lookupJobManager;
 
-            lookupJobManager.CompleteReadWriteDependency();
+            //lookupJobManager.CompleteReadWriteDependency();
+            jobHandle = JobHandle.CombineDependencies(
+                __group.CalculateEntityCountAsync(count, inputDeps),
+                lookupJobManager.readWriteJobHandle, 
+                jobHandle);
 
             Resize resize;
             resize.count = count;
             resize.result = result;
             resize.entities = entities.writer;
-            jobHandle = resize.ScheduleByRef(JobHandle.CombineDependencies(__group.CalculateEntityCountAsync(count, inputDeps), jobHandle));
+            jobHandle = resize.ScheduleByRef(jobHandle);
 
             RebuildEntitesEx rebuildEntites;
             rebuildEntites.result = result;
