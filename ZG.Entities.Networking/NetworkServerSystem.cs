@@ -549,6 +549,56 @@ namespace ZG
 
             __bufferInstances.SetValue(bufferInstance, iterator);
         }
+        
+        public StatusCode BeginMessage(
+            in NetworkPipeline pipeline, 
+            in T connection, 
+            uint messageType, 
+            out DataStreamWriter writer, 
+            int requiredPayloadSize = 0)
+        {
+            var statusCode = BeginSend(
+                pipeline, 
+                connection, 
+                out writer, 
+                requiredPayloadSize == 0 ? 0 : requiredPayloadSize + UnsafeUtility.SizeOf<int>() + UnsafeUtility.SizeOf<ushort>());
+            if (StatusCode.Success == statusCode)
+            {
+                writer.WritePackedUInt(messageType, StreamCompressionModel.Default);
+                writer.WriteUShort(0);
+                //writer.Flush();
+            }
+
+            return statusCode;
+        }
+
+        public int EndMessage(in DataStreamWriter writer)
+        {
+            var mode = StreamCompressionModel.Default;
+            var array = writer.AsNativeArray();
+            var reader = new DataStreamReader(array);
+            uint messageType = reader.ReadPackedUInt(mode);
+            switch (messageType)
+            {
+                case (uint)NetworkMessageType.RPC:
+                case (uint)NetworkMessageType.Register:
+                case (uint)NetworkMessageType.Unregister:
+                    break;
+                default:
+                    var stream = new DataStreamWriter(array);
+                    stream.WritePackedUInt(messageType, mode);
+
+                    reader.ReadUShort();
+
+                    int length = writer.Length, size = length - reader.GetBytesRead();
+                    UnityEngine.Assertions.Assert.IsFalse(size > ushort.MaxValue);
+                    stream.WriteUShort((ushort)size);
+
+                    break;
+            }
+
+            return EndSend(writer);
+        }
     }
 
     public struct NetworkServerMessage : System.IComparable<NetworkServerMessage>
