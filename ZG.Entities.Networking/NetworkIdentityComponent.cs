@@ -278,14 +278,52 @@ namespace ZG
             }
         }
 
-        public NetworkIdentityComponent Instantiate(
-            in Quaternion rotation,
-            in Vector3 position,
+        public AsyncInstantiateOperation<NetworkIdentityComponent> InstantiateAsync(
+            bool isLocalPlayer, 
             int type,
             uint id, 
-            bool isLocalPlayer)
+            in Vector3 position, 
+            in Quaternion rotation)
         {
-            ref var networkEntityManager = ref this.networkEntityManager;
+            Entity prefab = __Instantiate(type, id);
+            
+            var instance = GameObjectEntity.InstantiateAsync(
+                this, 
+                position, 
+                rotation, 
+                prefab);
+
+            instance.completed += x =>
+            {
+                var asyncInstantiateOperation = x as AsyncInstantiateOperation;
+                var results = asyncInstantiateOperation == null ? null : asyncInstantiateOperation.Result;
+                int numResults = results == null ? 0 : results.Length;
+                if (numResults < 1)
+                    return;
+                
+                UnityEngine.Object result;
+                for(int i = 0; i < numResults; ++i)
+                {
+                    result = results[i];
+                    if (result is NetworkIdentityComponent identity)
+                    {
+                        identity.isLocalPlayer = isLocalPlayer;
+                        identity.id = id;
+                    }
+                }
+            };
+
+            return instance;
+        }
+        
+        public AsyncInstantiateOperation<NetworkIdentityComponent> InstantiateAsync(
+            int count, 
+            int type,
+            in Span<Vector3> positions, 
+            in Span<Quaternion> rotations, 
+            Memory<uint> ids)
+        {
+            /*ref var networkEntityManager = ref this.networkEntityManager;
 
             bool isExists = networkEntityManager.Exists(id);
 
@@ -297,7 +335,53 @@ namespace ZG
                 networkIdentityType.value = type;
 
                 networkEntityManager.factory.SetComponentData(prefab, networkIdentityType);
-            }
+            }*/
+
+            int numIDs = ids.Length;
+            var prefabs = new Entity[numIDs];
+            for(int i = 0; i < numIDs; ++i)
+                prefabs[i] = __Instantiate(type, ids.Span[i]);
+
+            var instance = GameObjectEntity.InstantiateAsync(
+                this, 
+                count, 
+                positions, 
+                rotations, 
+                prefabs);
+
+            instance.completed += x =>
+            {
+                var asyncInstantiateOperation = x as AsyncInstantiateOperation;
+                var results = asyncInstantiateOperation == null ? null : asyncInstantiateOperation.Result;
+                int numResults = results == null ? 0 : results.Length;
+                if (numResults < 1)
+                    return;
+                
+                UnityEngine.Object result;
+                var idSpan = ids.Span;
+                int length = Mathf.Min(idSpan.Length, numResults);
+                for(int i = 0; i < length; ++i)
+                {
+                    result = results[i];
+                    if (result is NetworkIdentityComponent identity)
+                    {
+                        identity.isLocalPlayer = false;
+                        identity.id = idSpan[i];
+                    }
+                }
+            };
+
+            return instance;
+        }
+
+        public NetworkIdentityComponent Instantiate(
+            in Quaternion rotation,
+            in Vector3 position,
+            int type,
+            uint id,
+            bool isLocalPlayer)
+        {
+            Entity prefab = __Instantiate(type, id);
 
             var instance = GameObjectEntity.Instantiate(this, null, position, rotation, prefab);
 
@@ -402,6 +486,28 @@ namespace ZG
             this.id = id;
 
             return true;
+        }
+
+        private Entity __Instantiate(int type, uint id)
+        {
+            ref var networkEntityManager = ref this.networkEntityManager;
+
+            bool isExists = networkEntityManager.Exists(id);
+
+            Entity prefab = networkEntityManager.Register(id);
+
+            if (!isExists)
+            {
+                //为了让SetComponentData持久化，应对异步延迟
+                networkEntityManager.factory.AddComponent<NetworkIdentityType>(prefab);
+                
+                NetworkIdentityType networkIdentityType;
+                networkIdentityType.value = type;
+
+                networkEntityManager.factory.SetComponentData(prefab, networkIdentityType);
+            }
+
+            return prefab;
         }
     }
 }
