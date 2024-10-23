@@ -313,6 +313,47 @@ namespace ZG
             return server.CreateNewID();
         }
 
+        public AsyncInstantiateOperation<NetworkIdentityComponent> InstantiateAsync(
+            NetworkIdentityComponent prefab, 
+            in Quaternion rotation, 
+            in Vector3 position, 
+            int type,
+            uint id,
+            in NetworkConnection connection = default)
+        {
+            __Instantiate(type, id);
+
+            var target = prefab.InstantiateAsync(
+                server.GetConnectionState(connection) == NetworkConnection.State.Connected, type, id, position,
+                rotation);
+
+            target.completed += x =>
+            {
+                var asyncInstantiateOperation = x as AsyncInstantiateOperation;
+                var results = asyncInstantiateOperation == null ? null : asyncInstantiateOperation.Result;
+                int numResults = results == null ? 0 : results.Length;
+                if (numResults < 1)
+                    return;
+
+                NetworkIdentityComponent identity;
+                foreach (var result in results)
+                {
+                    identity = result as NetworkIdentityComponent;
+                    if(identity == null)
+                        continue;
+                    
+                    identity._host = null;
+
+                    if (__identities == null)
+                        __identities = new Dictionary<uint, NetworkIdentityComponent>();
+
+                    __identities.Add(id, identity);
+                }
+            };
+
+            return target;
+        }
+        
         public NetworkIdentityComponent Instantiate(
             NetworkIdentityComponent prefab, 
             in Quaternion rotation, 
@@ -321,50 +362,7 @@ namespace ZG
             uint id,
             in NetworkConnection connection = default)
         {
-            if (__freeIdentityIDs != null && __freeIdentityIDs.TryGetValue(type, out var freeIdentityIDs))
-            {
-                ref var manager = ref this.entityManager;
-                //var entityManager = world.EntityManager;
-                HashSet<uint>.Enumerator enumerator;
-                uint freeIdentityID;
-                bool isContinue;
-                do
-                {
-                    isContinue = false;
-
-                    enumerator = freeIdentityIDs.GetEnumerator();
-                    while (enumerator.MoveNext())
-                    {
-                        freeIdentityID = enumerator.Current;
-
-                        if (manager.Exists(freeIdentityID))
-                        {
-                            Debug.LogError($"Change {freeIdentityID} To {id}");
-
-                            if (manager.Retain(freeIdentityID, id))
-                            {
-                                enumerator.Dispose();
-
-                                freeIdentityIDs.Remove(freeIdentityID);
-
-                                break;
-                            }
-                        }
-                        else
-                        {
-                            manager.Release(freeIdentityID, false);
-
-                            enumerator.Dispose();
-
-                            freeIdentityIDs.Remove(freeIdentityID);
-
-                            isContinue = true;
-
-                            break;
-                        }
-                    }
-                } while (isContinue);
-            }
+            __Instantiate(type, id);
 
             var identity = prefab.Instantiate(
                 rotation,
@@ -964,6 +962,54 @@ namespace ZG
                 __controller = world.GetExistingSystemUnmanaged<NetworkRPCFactorySystem>().controller;
 
             return __controller;
+        }
+
+        private void __Instantiate(int type, uint id)
+        {
+            if (__freeIdentityIDs != null && __freeIdentityIDs.TryGetValue(type, out var freeIdentityIDs))
+            {
+                ref var manager = ref this.entityManager;
+                //var entityManager = world.EntityManager;
+                HashSet<uint>.Enumerator enumerator;
+                uint freeIdentityID;
+                bool isContinue;
+                do
+                {
+                    isContinue = false;
+
+                    enumerator = freeIdentityIDs.GetEnumerator();
+                    while (enumerator.MoveNext())
+                    {
+                        freeIdentityID = enumerator.Current;
+
+                        if (manager.Exists(freeIdentityID))
+                        {
+                            Debug.LogError($"Change {freeIdentityID} To {id}");
+
+                            if (manager.Retain(freeIdentityID, id))
+                            {
+                                enumerator.Dispose();
+
+                                freeIdentityIDs.Remove(freeIdentityID);
+
+                                break;
+                            }
+                        }
+                        else
+                        {
+                            manager.Release(freeIdentityID, false);
+
+                            enumerator.Dispose();
+
+                            freeIdentityIDs.Remove(freeIdentityID);
+
+                            isContinue = true;
+
+                            break;
+                        }
+                    }
+                } while (isContinue);
+            }
         }
 
         void Awake()

@@ -499,12 +499,12 @@ namespace ZG
             if (!isExists)
             {
                 //为了让SetComponentData持久化，应对异步延迟
-                networkEntityManager.factory.AddComponent<NetworkIdentityType>(prefab);
+                //networkEntityManager.factory.AddComponent<NetworkIdentityType>(prefab);
                 
                 NetworkIdentityType networkIdentityType;
                 networkIdentityType.value = type;
 
-                networkEntityManager.factory.SetComponentData(prefab, networkIdentityType);
+                networkEntityManager.factory.AddComponentData(prefab, networkIdentityType);
             }
 
             return prefab;
